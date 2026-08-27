@@ -59,11 +59,11 @@ export function AiPauseToggle() {
         ) : (
           <Pause size={16} />
         )}
-        {paused ? "Analisi AI in pausa — riprendi" : "Metti in pausa l'analisi AI"}
+        {paused ? "Modalita sonno attiva — riprendi" : "Modalita sonno"}
       </button>
       {paused && (
         <p className="text-[10px] text-muted mt-1.5 text-center">
-          Si riattiva automaticamente entro 2 ore se dimenticata attiva.
+          AI, analisi e notifiche restano ferme finche non premi riprendi. Il grafico TradingView resta indipendente.
         </p>
       )}
     </div>
