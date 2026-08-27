@@ -78,9 +78,6 @@ export function SignalPanel({ signal }: { signal: TradeSignal | null }) {
         <Metric label="TP1" value={signal.tp1.toFixed(2)} />
         <Metric label="TP2" value={signal.tp2.toFixed(2)} />
         <Metric label="Esito" value={signal.outcome ?? "—"} />
-        {signal.stopLossTp2 !== null && signal.stopLossTp2 !== undefined && (
-          <Metric label="SL dopo TP1" value={signal.stopLossTp2.toFixed(2)} />
-        )}
       </div>
 
       <div className="rounded-lg bg-panel2 border border-border px-3 py-2.5">

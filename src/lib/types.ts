@@ -20,10 +20,6 @@ export interface TradeSignal {
   stopLoss: number;
   tp1: number;
   tp2: number;
-  // Puramente informativo (canale normale): dove spostare lo stop SE TP1
-  // viene gia' raggiunto e il trade resta aperto verso TP2 (es. breakeven).
-  // Non influenza in alcun modo come l'app chiude i trade.
-  stopLossTp2?: number | null;
   riskReward: number;
   confidence: number;
   reasoning: string;

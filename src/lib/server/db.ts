@@ -39,12 +39,6 @@ export async function ensureSchema() {
       is_demo BOOLEAN NOT NULL DEFAULT false
     );
     CREATE INDEX IF NOT EXISTS idx_signals_created_at ON signals (created_at DESC);
-    -- Puramente informativo (canale normale): dove spostare lo stop SE TP1
-    -- viene raggiunto e il trade resta aperto verso TP2 (es. breakeven).
-    -- ADD COLUMN IF NOT EXISTS perche' la tabella esiste gia' in produzione
-    -- con dati: CREATE TABLE IF NOT EXISTS da solo non aggiunge colonne a
-    -- una tabella che esiste gia'. Non influenza chiusura trade/R:R/validazione.
-    ALTER TABLE signals ADD COLUMN IF NOT EXISTS stop_loss_tp2 NUMERIC;
 
     CREATE TABLE IF NOT EXISTS market_snapshots (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -173,7 +167,6 @@ export async function insertSignal(signal: {
   stopLoss: number | null;
   tp1: number | null;
   tp2: number | null;
-  stopLossTp2?: number | null;
   riskReward: number | null;
   confidence: number;
   reasoning: string;
@@ -184,14 +177,13 @@ export async function insertSignal(signal: {
   const stopLoss = signal.stopLoss ?? 0;
   const tp1 = signal.tp1 ?? 0;
   const tp2 = signal.tp2 ?? 0;
-  const stopLossTp2 = signal.stopLossTp2 ?? null;
   const riskReward = signal.riskReward ?? 0;
   const confidence = signal.confidence ?? 0;
   const reasoning = signal.reasoning ?? "Risposta AI incompleta: campo mancante.";
   const res = await client.query(
     `INSERT INTO signals
-      (direction, entry, stop_loss, tp1, tp2, stop_loss_tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)
+      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
      RETURNING id, created_at`,
     [
       signal.direction,
@@ -199,7 +191,6 @@ export async function insertSignal(signal: {
       stopLoss,
       tp1,
       tp2,
-      stopLossTp2,
       riskReward,
       confidence,
       reasoning,
@@ -258,7 +249,7 @@ export async function getLatestContextSnapshot() {
 export async function getSignalHistory(limit = 20) {
   const client = getPool();
   const res = await client.query(
-    `SELECT id, created_at, direction, entry, stop_loss, tp1, tp2, stop_loss_tp2, risk_reward,
+    `SELECT id, created_at, direction, entry, stop_loss, tp1, tp2, risk_reward,
             confidence, reasoning, outcome, result_r, closed_at
      FROM signals WHERE is_demo = false ORDER BY created_at DESC LIMIT $1`,
     [limit]
