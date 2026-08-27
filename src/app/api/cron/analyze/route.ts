@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSetting } from "@/lib/server/db";
 import { runAnalysis } from "@/lib/server/runAnalysis";
 
 export const dynamic = "force-dynamic";
@@ -12,12 +13,29 @@ function isAuthorized(req: NextRequest) {
   return headerSecret === secret || querySecret === secret;
 }
 
+async function isSleepModeEnabled() {
+  try {
+    return (await getSetting("ai_paused")) === "true";
+  } catch {
+    // Se il DB non e' ancora inizializzato, runAnalysis gestisce ensureSchema.
+    return false;
+  }
+}
+
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
   }
 
   try {
+    if (await isSleepModeEnabled()) {
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        reason: "sleep_mode",
+      });
+    }
+
     const oro = await runAnalysis();
     return NextResponse.json({ ok: true, ...oro });
   } catch (err) {
