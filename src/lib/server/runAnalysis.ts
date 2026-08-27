@@ -16,6 +16,8 @@ import {
   getUltimoContesto,
   getEventiSetupAttivi,
   chiudiEventoSetup,
+  salvaCandeleMemoria,
+  pulisciCandeleMemoria,
 } from "@/lib/server/db";
 import { getMarketSnapshot, getCurrentPrice, isMarketOpen } from "@/lib/server/marketData";
 import { metaApiFetchTimeSeries } from "@/lib/server/metaApiData";
@@ -29,9 +31,12 @@ import {
   rilevaEventi,
   motivoInvalidazione,
   eventoScaduto,
-  prezzoDentroUnaZona,
+  zoneOccupateDalPrezzo,
   calcolaFingerprint,
   type EventoAttivo,
+  type ZonaConTipo,
+  type Timeframe,
+  type Direzione,
 } from "@/lib/server/setupState";
 import {
   costruisciContesto,
@@ -43,6 +48,17 @@ import {
 } from "@/lib/server/marketContext";
 
 const SIGNAL_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+
+// Forma minima di una candela grezza cosi' come arriva da marketData.ts
+// (stringhe numeriche, indice 0 = candela in formazione). Serve solo qui,
+// per il blocco di persistenza della memoria candele.
+interface CandelaGrezza {
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  datetime: string;
+}
 
 // Il controllo tecnico gira a ogni ciclo (anche ogni minuto). Questi limiti
 // riguardano SOLO le scritture e le chiamate a pagamento, non il monitoraggio.
@@ -188,6 +204,41 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   const marketSnapshot = await getMarketSnapshot();
 
+  // ================ MEMORIA CANDELE (solo infrastruttura) =================
+  // Persistenza pura delle candele CHIUSE H1/M30/M5 su Neon (tabella
+  // candle_memory, separata da market_snapshots.raw). Non legge questa
+  // memoria nessuna parte della strategia o del payload AI: e' solo
+  // l'infrastruttura per renderle rileggibili in futuro. Un fallimento qui
+  // non deve mai interrompere il ciclo di analisi.
+  try {
+    const soleChiuse = (candele: CandelaGrezza[] | undefined) =>
+      (candele ?? [])
+        .slice(1) // indice 0 = candela ancora in formazione, esclusa
+        .map((c) => ({
+          datetime: new Date(c.datetime).toISOString(),
+          open: Number(c.open),
+          high: Number(c.high),
+          low: Number(c.low),
+          close: Number(c.close),
+        }))
+        .filter(
+          (c) =>
+            Number.isFinite(c.open) &&
+            Number.isFinite(c.high) &&
+            Number.isFinite(c.low) &&
+            Number.isFinite(c.close) &&
+            Number.isFinite(new Date(c.datetime).getTime())
+        );
+
+    await salvaCandeleMemoria("H1", soleChiuse(marketSnapshot.candles["1h"]));
+    await salvaCandeleMemoria("M30", soleChiuse(marketSnapshot.candles["30m"]));
+    await salvaCandeleMemoria("M5", soleChiuse(marketSnapshot.candles["5m"]));
+    await pulisciCandeleMemoria();
+  } catch (err) {
+    console.error("[runAnalysis] memoria candele H1/M30/M5 fallita:", err);
+  }
+  // ================ fine MEMORIA CANDELE ====================================
+
   if (hasOpenTrade && !naturalOutcome && !expired && force) {
     // Prima qui si registrava sempre 0: 21 dei 24 "BREAKEVEN" erano in realta'
     // trade interrotti a meta' volo, in media dopo 21 minuti, e falsavano meta'
@@ -321,17 +372,37 @@ export async function runAnalysis(options?: { force?: boolean }) {
   );
 
   // 6) impronta del setup
-  const zonaRaggiunta = prezzoDentroUnaZona(marketSnapshot.xauusd, [
-    marketSnapshot.ictOrderBlocksH1,
-    marketSnapshot.ictFvgH1,
-    marketSnapshot.ictOrderBlocksM5,
-    marketSnapshot.ictFvgM5,
+  // Le zone vengono etichettate con timeframe/tipo/direzione PRIMA del
+  // controllo "il prezzo e' dentro?": la fingerprint deve poter distinguere
+  // "dentro l'Order Block M30 ribassista 2375-2371" da "dentro la FVG H1
+  // rialzista 2360-2358", non solo sapere che e' "dentro una zona qualsiasi".
+  // Copre H1, M30 e M5 (prima mancava M30).
+  const tagZone = (
+    timeframe: Timeframe,
+    tipo: "orderBlock" | "fvg",
+    zone: { direzione: string; top: number; bottom: number }[] | undefined
+  ): ZonaConTipo[] =>
+    (zone ?? []).map((z) => ({
+      timeframe,
+      tipo,
+      direzione: z.direzione as Direzione,
+      top: z.top,
+      bottom: z.bottom,
+    }));
+
+  const zoneOccupate = zoneOccupateDalPrezzo(marketSnapshot.xauusd, [
+    tagZone("H1", "orderBlock", marketSnapshot.ictOrderBlocksH1),
+    tagZone("H1", "fvg", marketSnapshot.ictFvgH1),
+    tagZone("M30", "orderBlock", marketSnapshot.ictOrderBlocksM30),
+    tagZone("M30", "fvg", marketSnapshot.ictFvgM30),
+    tagZone("M5", "orderBlock", marketSnapshot.ictOrderBlocksM5),
+    tagZone("M5", "fvg", marketSnapshot.ictFvgM5),
   ]);
   const impronta = calcolaFingerprint(
     eventiAttivi,
     marketSnapshot.xauusd,
     marketSnapshot.atr30m,
-    zonaRaggiunta
+    zoneOccupate
   );
   const improntaPrecedente = await getSetting("setup_fingerprint");
   const improntaCambiata = impronta !== improntaPrecedente;
@@ -350,7 +421,7 @@ export async function runAnalysis(options?: { force?: boolean }) {
       skipped: true,
       reason: "setup_invariato",
       eventiAttivi: eventiAttivi.length,
-      zonaRaggiunta,
+      zoneOccupate: zoneOccupate.length,
       contesto: {
         h1: { regime: contesto.h1.regime, fase: contesto.h1.fase },
         m30: { regime: contesto.m30.regime, fase: contesto.m30.fase },

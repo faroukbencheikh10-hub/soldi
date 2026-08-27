@@ -121,6 +121,22 @@ export async function ensureSchema() {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    -- Memoria persistente delle candele CHIUSE (H1/M30/M5). Tabella dedicata,
+    -- separata da market_snapshots.raw: qui dentro vanno solo le candele,
+    -- leggibili singolarmente, non un blob JSON di tutto lo snapshot.
+    CREATE TABLE IF NOT EXISTS candle_memory (
+      timeframe TEXT NOT NULL CHECK (timeframe IN ('H1','M30','M5')),
+      datetime TIMESTAMPTZ NOT NULL,
+      open NUMERIC NOT NULL,
+      high NUMERIC NOT NULL,
+      low NUMERIC NOT NULL,
+      close NUMERIC NOT NULL,
+      inserita_il TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (timeframe, datetime)
+    );
+    CREATE INDEX IF NOT EXISTS idx_candle_memory_timeframe_datetime
+      ON candle_memory (timeframe, datetime DESC);
   `);
 }
 
@@ -524,4 +540,104 @@ export async function getUltimoContesto() {
      FROM market_context ORDER BY creato_il DESC LIMIT 1`
   );
   return res.rows[0] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// MEMORIA CANDELE (H1 / M30 / M5)
+//
+// Solo infrastruttura: salva e rende rileggibili le candele CHIUSE dei tre
+// timeframe. Nessuna funzione qui dentro viene letta dalla strategia o
+// dall'AI -- e' compito di chi la richiama decidere se e come usarla in
+// futuro. Deliberatamente separata da market_snapshots.raw (che resta un
+// blob JSON dell'intero snapshot, mai riletto candela per candela).
+// ---------------------------------------------------------------------------
+
+export type CandleMemoryTimeframe = "H1" | "M30" | "M5";
+
+export const CANDLE_MEMORY_RETENTION_MS: Record<CandleMemoryTimeframe, number> = {
+  H1: 72 * 60 * 60 * 1000,
+  M30: 48 * 60 * 60 * 1000,
+  M5: 12 * 60 * 60 * 1000,
+};
+
+export interface CandelaMemoria {
+  timeframe: CandleMemoryTimeframe;
+  datetime: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+// Inserisce solo candele CHIUSE (spetta al chiamante escludere quella ancora
+// in formazione). La chiave (timeframe, datetime) fa da deduplicazione:
+// una candela gia' presente viene ignorata silenziosamente, mai aggiornata.
+// Ritorna quante candele erano davvero nuove.
+export async function salvaCandeleMemoria(
+  timeframe: CandleMemoryTimeframe,
+  candele: { datetime: string; open: number; high: number; low: number; close: number }[]
+): Promise<number> {
+  if (!Array.isArray(candele) || candele.length === 0) return 0;
+  const client = getPool();
+  let nuove = 0;
+  for (const c of candele) {
+    const res = await client.query(
+      `INSERT INTO candle_memory (timeframe, datetime, open, high, low, close)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (timeframe, datetime) DO NOTHING
+       RETURNING timeframe`,
+      [timeframe, c.datetime, c.open, c.high, c.low, c.close]
+    );
+    if (res.rowCount && res.rowCount > 0) nuove += 1;
+  }
+  return nuove;
+}
+
+// Elimina le candele piu' vecchie della retention del proprio timeframe.
+// Senza argomento pulisce tutti e tre i timeframe con la propria soglia.
+export async function pulisciCandeleMemoria(timeframe?: CandleMemoryTimeframe): Promise<void> {
+  const client = getPool();
+  const timeframes: CandleMemoryTimeframe[] = timeframe ? [timeframe] : ["H1", "M30", "M5"];
+  for (const tf of timeframes) {
+    const soglia = new Date(Date.now() - CANDLE_MEMORY_RETENTION_MS[tf]).toISOString();
+    await client.query(`DELETE FROM candle_memory WHERE timeframe = $1 AND datetime < $2`, [tf, soglia]);
+  }
+}
+
+// Legge la memoria di un timeframe in ordine cronologico (dalla piu' vecchia
+// alla piu' recente). `limit`, se passato, prende le N candele piu' recenti
+// mantenendo comunque l'ordine crescente in uscita.
+export async function leggiCandeleMemoria(
+  timeframe: CandleMemoryTimeframe,
+  limit?: number
+): Promise<CandelaMemoria[]> {
+  const client = getPool();
+  const res = limit
+    ? await client.query(
+        `SELECT * FROM (
+           SELECT timeframe, datetime, open, high, low, close
+           FROM candle_memory
+           WHERE timeframe = $1
+           ORDER BY datetime DESC
+           LIMIT $2
+         ) sub
+         ORDER BY datetime ASC`,
+        [timeframe, limit]
+      )
+    : await client.query(
+        `SELECT timeframe, datetime, open, high, low, close
+         FROM candle_memory
+         WHERE timeframe = $1
+         ORDER BY datetime ASC`,
+        [timeframe]
+      );
+
+  return res.rows.map((r: { timeframe: string; datetime: string; open: string; high: string; low: string; close: string }) => ({
+    timeframe: r.timeframe as CandleMemoryTimeframe,
+    datetime: new Date(r.datetime).toISOString(),
+    open: Number(r.open),
+    high: Number(r.high),
+    low: Number(r.low),
+    close: Number(r.close),
+  }));
 }

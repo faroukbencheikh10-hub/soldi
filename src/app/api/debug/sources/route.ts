@@ -141,6 +141,8 @@ export async function GET(req: NextRequest) {
   const chiedeAi = req.nextUrl.searchParams.get("ai");
   const aiAutorizzato = Boolean(secret) && chiedeAi === secret;
 
+  const openaiModel = process.env.OPENAI_MODEL?.trim() || "gpt-5.4";
+
   const openai = aiAutorizzato
     ? timed(async () => {
         if (!process.env.OPENAI_API_KEY) return null;
@@ -152,7 +154,7 @@ export async function GET(req: NextRequest) {
             Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
           },
           body: JSON.stringify({
-            model: "gpt-5.6-sol",
+            model: openaiModel,
             response_format: { type: "json_object" },
             messages: [
               { role: "system", content: 'Rispondi solo con {"ok":true}.' },
@@ -163,7 +165,7 @@ export async function GET(req: NextRequest) {
         const text = await res.text();
         return {
           http: res.status,
-          modello: "gpt-5.6-sol",
+          modello: openaiModel,
           latenzaMs: Date.now() - inizio,
           risposta: res.ok ? text.slice(0, 200) : undefined,
           errore: res.ok ? undefined : text.slice(0, 300),

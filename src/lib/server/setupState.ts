@@ -207,15 +207,63 @@ export function prezzoDentroUnaZona(prezzo: number, zone: (Zona[] | undefined)[]
   return false;
 }
 
+export type TipoZona = "orderBlock" | "fvg";
+
+// Zona operativa gia' etichettata con timeframe/tipo/direzione, cosi' come
+// arriva dal chiamante (runAnalysis.ts) prima del controllo "il prezzo e'
+// dentro?".
+export interface ZonaConTipo extends Zona {
+  timeframe: Timeframe;
+  tipo: TipoZona;
+  direzione: Direzione;
+}
+
+// Una zona che il prezzo sta occupando ADESSO, con tutto cio' che la
+// distingue da un'altra zona: timeframe, tipo, direzione, top e bottom. Serve
+// a rispondere non solo "il prezzo e' in una zona?" ma "in QUALE zona".
+export interface ZonaOccupata {
+  timeframe: Timeframe;
+  tipo: TipoZona;
+  direzione: Direzione;
+  top: number;
+  bottom: number;
+}
+
+// Individua le zone operative (Order Block / FVG, su H1/M30/M5) in cui il
+// prezzo si trova ora. Sostituisce il vecchio controllo booleano
+// "prezzoDentroUnaZona" ai fini della fingerprint: un semplice true/false non
+// distingue "il prezzo e' entrato in un nuovo Order Block M30 ribassista" da
+// "e' rientrato nella stessa FVG H1 di prima" -- due situazioni diverse che
+// devono riattivare l'analisi in modo diverso (o non riattivarla affatto se
+// e' la stessa zona di gia').
+export function zoneOccupateDalPrezzo(prezzo: number, gruppi: (ZonaConTipo[] | undefined)[]): ZonaOccupata[] {
+  if (!Number.isFinite(prezzo)) return [];
+  const trovate: ZonaOccupata[] = [];
+  for (const gruppo of gruppi) {
+    if (!Array.isArray(gruppo)) continue;
+    for (const z of gruppo) {
+      const top = Number(z?.top);
+      const bottom = Number(z?.bottom);
+      if (!Number.isFinite(top) || !Number.isFinite(bottom)) continue;
+      if (prezzo <= Math.max(top, bottom) && prezzo >= Math.min(top, bottom)) {
+        trovate.push({ timeframe: z.timeframe, tipo: z.tipo, direzione: z.direzione, top, bottom });
+      }
+    }
+  }
+  return trovate;
+}
+
 // L'impronta cambia quando cambia qualcosa che puo' cambiare la decisione:
-// un evento che nasce o viene invalidato, l'ingresso in una zona operativa,
-// oppure un movimento del prezzo rispetto al livello dell'evento superiore a
-// un quarto di ATR. Non cambia per le oscillazioni minime.
+// un evento che nasce o viene invalidato, l'ingresso in una zona operativa
+// NUOVA (identificata per timeframe/tipo/direzione/estremi, non un semplice
+// flag), oppure un movimento del prezzo rispetto al livello dell'evento
+// superiore a un quarto di ATR. Non cambia per le oscillazioni minime, e non
+// cambia se il prezzo resta nella stessa identica zona di prima.
 export function calcolaFingerprint(
   eventi: EventoAttivo[],
   prezzo: number,
   atrRiferimento: number | null,
-  zonaRaggiunta: boolean
+  zoneOccupate: ZonaOccupata[]
 ): string {
   const passo = atrRiferimento !== null && atrRiferimento > 0 ? atrRiferimento / 4 : null;
 
@@ -226,5 +274,9 @@ export function calcolaFingerprint(
     })
     .sort();
 
-  return `${parti.join("|")}#zona=${zonaRaggiunta ? 1 : 0}`;
+  const zone = zoneOccupate
+    .map((z) => `${z.timeframe}:${z.tipo}:${z.direzione}:${z.top.toFixed(2)}:${z.bottom.toFixed(2)}`)
+    .sort();
+
+  return `${parti.join("|")}#zone=${zone.join(",")}`;
 }
