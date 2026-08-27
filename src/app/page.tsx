@@ -29,6 +29,7 @@ function mapSignalRow(row: any): TradeSignal {
     stopLoss: Number(row.stop_loss),
     tp1: Number(row.tp1),
     tp2: Number(row.tp2),
+    stopLossTp2: row.stop_loss_tp2 !== null && row.stop_loss_tp2 !== undefined ? Number(row.stop_loss_tp2) : undefined,
     riskReward: Number(row.risk_reward),
     confidence: Number(row.confidence),
     reasoning: row.reasoning,

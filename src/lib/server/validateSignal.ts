@@ -10,6 +10,11 @@ export interface RawSignal {
   stopLoss: number | null;
   tp1: number | null;
   tp2: number | null;
+  // Puramente informativo: dove spostare lo stop SE TP1 viene raggiunto e il
+  // trade resta aperto verso TP2 (es. breakeven). Non entra in NESSUN calcolo
+  // di validazione qui sotto (R:R, direzione, chiusura trade): e' solo un
+  // suggerimento che attraversa la validazione senza essere verificato.
+  stopLossTp2?: number | null;
   riskReward: number | null;
   confidence: number;
   reasoning: string;
@@ -41,6 +46,7 @@ export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "a
       stopLoss: 0,
       tp1: 0,
       tp2: 0,
+      stopLossTp2: null,
       riskReward: 0,
       rejectedReason: `direzione "${raw.direction}" non riconosciuta`,
     };
@@ -60,6 +66,7 @@ export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "a
       stopLoss: 0,
       tp1: 0,
       tp2: 0,
+      stopLossTp2: null,
       riskReward: 0,
       rejectedReason: `${normalized} scartato: entry/stopLoss/tp1 mancanti`,
     };
@@ -82,6 +89,7 @@ export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "a
       stopLoss: 0,
       tp1: 0,
       tp2: 0,
+      stopLossTp2: null,
       riskReward: 0,
       rejectedReason: `BUY scartato: richiesto SL < Entry < TP1, ricevuto SL=${stopLoss} Entry=${entry} TP1=${tp1}`,
     };
@@ -95,6 +103,7 @@ export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "a
       stopLoss: 0,
       tp1: 0,
       tp2: 0,
+      stopLossTp2: null,
       riskReward: 0,
       rejectedReason: `SELL scartato: richiesto TP1 < Entry < SL, ricevuto TP1=${tp1} Entry=${entry} SL=${stopLoss}`,
     };
@@ -114,6 +123,7 @@ export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "a
       stopLoss: 0,
       tp1: 0,
       tp2: 0,
+      stopLossTp2: null,
       riskReward: 0,
       rejectedReason: `${normalized} scartato: rapporto rischio/rendimento reale ${riskReward}, sotto il minimo ${MIN_RISK_REWARD} richiesto dalla strategia (TP1 deve distare almeno 1,5 volte lo stop)`,
     };

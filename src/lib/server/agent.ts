@@ -41,6 +41,7 @@ Quando il prezzo e' arrivato nella zona di pullback, "ict_struttura_5m", "ict_or
 STOP LOSS E TAKE PROFIT:
 - Stop Loss: posizionalo appena oltre la zona di pullback usata (oltre il "top" per una zona ribassista/SELL, oltre il "bottom" per una zona rialzista/BUY) o oltre il massimo/minimo che invaliderebbe davvero il setup -- MAI stretto artificialmente solo per migliorare il Risk/Reward sulla carta. Usa "atr_15m" solo come controllo di buonsenso: se lo stop risultasse piu' stretto di circa 0,4 volte l'ATR probabilmente la zona scelta non e' quella giusta.
 - Take Profit: punta alla prossima zona di liquidita' -- un Equal High/Low opposto, il lato opposto di "liquidita_24h", o un massimo/minimo strutturale rilevante. TP1 deve comunque distare almeno 1,5 volte la distanza dello stop. ATTENZIONE: questa regola e' verificata automaticamente dal codice sui numeri che scrivi -- un segnale con TP1 piu' vicino di 1,5 volte lo stop viene scartato e trasformato in NO_TRADE. Non proporre setup sotto questa soglia: o allarghi il target fino a una zona di liquidita' vera, o e' NO_TRADE.
+- Stop Loss dopo TP1 (campo "stopLossTp2", puramente informativo): indica dove sposteresti lo stop SE il prezzo raggiungesse gia' TP1 e il trade restasse aperto verso TP2 -- tipicamente il livello di entry (breakeven) o un livello leggermente migliore se la struttura nel frattempo lo permette. Questo valore NON cambia in alcun modo la generazione del segnale, la confidence o il Risk/Reward richiesti sopra: e' solo un suggerimento che verra' mostrato accanto al segnale, il codice continua a decidere l'esito del trade guardando solo Entry/Stop Loss/TP1 come sempre. Per NO_TRADE lascialo a null.
 
 ALTRE REGOLE:
 - Genera BUY o SELL se la tua confidence e' >= 65 e il percorso a quattro elementi (H1-led o M30-led) rispetta la REGOLA DI CONTEGGIO, tenendo conto di bias e raffinamento M5 come descritto sopra.
@@ -59,6 +60,7 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in quest
   "stopLoss": number,
   "tp1": number,
   "tp2": number,
+  "stopLossTp2": number | null,
   "riskReward": number,
   "confidence": number,
   "reasoning": "spiegazione concisa in italiano, 2-4 frasi, che nomini gli elementi chiave seguiti e il timeframe che guida il setup (es. sweep su X, CHoCH M30 confermato, entrata su Order Block M30)"
