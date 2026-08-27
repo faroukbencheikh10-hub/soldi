@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSchema, isAiPaused, setAiPaused } from "@/lib/server/db";
+import { ensureSchema, getSetting, setAiPaused } from "@/lib/server/db";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
     await ensureSchema();
-    const paused = await isAiPaused();
+    const paused = (await getSetting("ai_paused")) === "true";
     return NextResponse.json({ ok: true, paused });
   } catch (err) {
     return NextResponse.json(
