@@ -25,9 +25,11 @@ function directionLabel(direction: TradeSignal["direction"]) {
 export function SignalHistory({
   signals,
   compact = false,
+  title = "Storico segnali",
 }: {
   signals: TradeSignal[];
   compact?: boolean;
+  title?: string;
 }) {
   const [filter, setFilter] = useState<(typeof DIRECTION_FILTERS)[number]>("Tutti");
 
@@ -39,7 +41,7 @@ export function SignalHistory({
   return (
     <div className="rounded-xl border border-border bg-panel p-4 sm:p-5">
       <div className="flex items-center justify-between mb-4">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">Storico segnali</span>
+        <span className="text-xs font-medium uppercase tracking-wide text-muted">{title}</span>
         <div className="flex gap-1 rounded-lg bg-panel2 p-1">
           {DIRECTION_FILTERS.map((f) => (
             <button

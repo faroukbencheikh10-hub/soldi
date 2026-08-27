@@ -87,6 +87,29 @@ export async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_signals_5m_created_at ON signals_5m (created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS signals_30m (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      direction TEXT NOT NULL CHECK (direction IN ('BUY','SELL','NO_TRADE')),
+      entry NUMERIC NOT NULL,
+      stop_loss NUMERIC NOT NULL,
+      tp1 NUMERIC NOT NULL,
+      tp2 NUMERIC NOT NULL,
+      risk_reward NUMERIC NOT NULL,
+      confidence NUMERIC NOT NULL,
+      reasoning TEXT NOT NULL,
+      market_snapshot JSONB,
+      setup_key TEXT,
+      outcome TEXT CHECK (outcome IN ('WIN','LOSS','OPEN','BREAKEVEN')),
+      result_r NUMERIC,
+      closed_at TIMESTAMPTZ,
+      is_demo BOOLEAN NOT NULL DEFAULT false
+    );
+    CREATE INDEX IF NOT EXISTS idx_signals_30m_created_at ON signals_30m (created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_30m_actionable_setup
+      ON signals_30m (setup_key)
+      WHERE is_demo = false AND direction IN ('BUY','SELL') AND setup_key IS NOT NULL;
+
     CREATE TABLE IF NOT EXISTS setup_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tipo TEXT NOT NULL CHECK (tipo IN ('sweep','displacement','bos','choch')),
@@ -393,6 +416,156 @@ export async function getStats5m() {
   return res.rows[0];
 }
 
+export async function insertSignal30m(
+  signal: {
+    direction: string;
+    entry: number | null;
+    stopLoss: number | null;
+    tp1: number | null;
+    tp2: number | null;
+    riskReward: number | null;
+    confidence: number;
+    reasoning: string;
+    marketSnapshot?: unknown;
+  },
+  setupKey: string | null
+) {
+  const client = getPool();
+  const res = await client.query(
+    `INSERT INTO signals_30m
+      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning,
+       market_snapshot, setup_key, is_demo)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)
+     ON CONFLICT DO NOTHING
+     RETURNING id, created_at`,
+    [
+      signal.direction,
+      signal.entry ?? 0,
+      signal.stopLoss ?? 0,
+      signal.tp1 ?? 0,
+      signal.tp2 ?? 0,
+      signal.riskReward ?? 0,
+      signal.confidence ?? 0,
+      signal.reasoning ?? "Risposta AI incompleta: campo mancante.",
+      JSON.stringify(signal.marketSnapshot ?? {}),
+      setupKey,
+    ]
+  );
+  if (res.rows[0]) return { ...res.rows[0], inserted: true };
+  if (setupKey) {
+    const existing = await client.query(
+      `SELECT id, created_at FROM signals_30m
+       WHERE setup_key = $1 AND is_demo = false AND direction IN ('BUY','SELL')
+       ORDER BY created_at DESC LIMIT 1`,
+      [setupKey]
+    );
+    if (existing.rows[0]) return { ...existing.rows[0], inserted: false };
+  }
+  throw new Error("Inserimento segnale M30 non riuscito");
+}
+
+export async function getSignalHistory30m(limit = 50) {
+  const client = getPool();
+  try {
+    const res = await client.query(
+      `SELECT * FROM signals_30m
+       WHERE is_demo = false AND direction != 'NO_TRADE'
+       ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+    return res.rows;
+  } catch (err) {
+    if ((err as { code?: string }).code === "42P01") return [];
+    throw err;
+  }
+}
+
+export async function getLatestSignal30m() {
+  const client = getPool();
+  const res = await client.query(
+    `SELECT * FROM signals_30m WHERE is_demo = false ORDER BY created_at DESC LIMIT 1`
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function hasTradedSetup30m(setupKey: string): Promise<boolean> {
+  const client = getPool();
+  const res = await client.query(
+    `SELECT 1 FROM signals_30m
+     WHERE is_demo = false
+       AND setup_key = $1
+       AND direction IN ('BUY','SELL')
+     LIMIT 1`,
+    [setupKey]
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+export async function getOpenSignalsOtherChannels() {
+  const client = getPool();
+  const res = await client.query(
+    `SELECT 'principale' AS canale, id, direction, entry
+       FROM signals
+      WHERE is_demo = false
+        AND direction IN ('BUY','SELL')
+        AND (outcome IS NULL OR outcome = 'OPEN')
+     UNION ALL
+     SELECT 'veloce' AS canale, id, direction, entry
+       FROM signals_5m
+      WHERE is_demo = false
+        AND direction IN ('BUY','SELL')
+        AND (outcome IS NULL OR outcome = 'OPEN')`
+  );
+  return res.rows as Array<{
+    canale: string;
+    id: string;
+    direction: "BUY" | "SELL";
+    entry: string | number;
+  }>;
+}
+
+export async function closeSignal30m(
+  id: string,
+  outcome: "WIN" | "LOSS" | "BREAKEVEN",
+  resultR: number,
+  note?: string
+) {
+  const client = getPool();
+  if (note) {
+    await client.query(
+      `UPDATE signals_30m
+       SET outcome = $2, result_r = $3, closed_at = now(), reasoning = reasoning || $4
+       WHERE id = $1`,
+      [id, outcome, resultR, note]
+    );
+  } else {
+    await client.query(
+      `UPDATE signals_30m SET outcome = $2, result_r = $3, closed_at = now() WHERE id = $1`,
+      [id, outcome, resultR]
+    );
+  }
+}
+
+export async function getStats30m() {
+  const client = getPool();
+  try {
+    const res = await client.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE is_demo = false AND direction != 'NO_TRADE') AS total,
+        COUNT(*) FILTER (WHERE is_demo = false AND outcome = 'WIN') AS wins,
+        COUNT(*) FILTER (WHERE is_demo = false AND outcome IN ('WIN','LOSS')) AS decided,
+        AVG(risk_reward) FILTER (WHERE is_demo = false AND direction != 'NO_TRADE') AS avg_rr
+      FROM signals_30m
+    `);
+    return res.rows[0];
+  } catch (err) {
+    if ((err as { code?: string }).code === "42P01") {
+      return { total: 0, wins: 0, decided: 0, avg_rr: null };
+    }
+    throw err;
+  }
+}
+
 export async function getSetting(key: string): Promise<string | null> {
   const client = getPool();
   const res = await client.query(`SELECT value FROM app_settings WHERE key = $1`, [key]);
@@ -434,7 +607,7 @@ export async function setAiPaused(paused: boolean) {
 // di ogni canale. Poche decine di byte invece di centinaia di KB.
 export async function getTickerState() {
   const client = getPool();
-  const [snap, ultimo, ultimo5m] = await Promise.all([
+  const [snap, ultimo, ultimo5m, ultimo30m] = await Promise.all([
     client.query(
       `SELECT xauusd, xauusd_change_pct, created_at, raw->>'xauusdQuotedAt' AS xauusd_quoted_at
        FROM market_snapshots ORDER BY created_at DESC LIMIT 1`
@@ -447,6 +620,13 @@ export async function getTickerState() {
       `SELECT id, direction, entry, confidence FROM signals_5m
        WHERE is_demo = false ORDER BY created_at DESC LIMIT 1`
     ),
+    client.query(
+      `SELECT id, direction, entry, confidence FROM signals_30m
+       WHERE is_demo = false ORDER BY created_at DESC LIMIT 1`
+    ).catch((err: { code?: string }) => {
+      if (err.code === "42P01") return { rows: [] };
+      throw err;
+    }),
   ]);
   const s = snap.rows[0] ?? null;
   return {
@@ -459,6 +639,7 @@ export async function getTickerState() {
     quotatoIl: s?.xauusd_quoted_at ? Number(s.xauusd_quoted_at) : null,
     ultimoSegnale: ultimo.rows[0] ?? null,
     ultimoSegnale5m: ultimo5m.rows[0] ?? null,
+    ultimoSegnale30m: ultimo30m.rows[0] ?? null,
   };
 }
 

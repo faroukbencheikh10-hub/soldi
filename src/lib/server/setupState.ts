@@ -51,7 +51,7 @@ export interface EventoAttivo extends EventoRilevato {
 // se nessuno lo ha invalidato. NON e' il meccanismo normale di chiusura.
 export const TTL_MS: Record<Timeframe, number> = {
   H1: 4 * 60 * 60 * 1000,
-  M30: 90 * 60 * 1000,
+  M30: 4 * 60 * 60 * 1000,
   M5: 20 * 60 * 1000,
 };
 
@@ -164,7 +164,9 @@ export function rilevaEventi(
 // Un evento resta valido finche' il prezzo non chiude oltre il suo livello
 // nella direzione che lo nega. Nessun criterio temporale qui dentro.
 export function motivoInvalidazione(evento: EventoAttivo, candele: Candela[] | undefined): string | null {
-  const c = normalizza(candele);
+  // L'indice 0 e' la candela ancora in formazione. Non puo' invalidare un
+  // setup: l'invalidazione richiede una chiusura confermata oltre il livello.
+  const c = normalizza(candele).slice(1);
   const nascita = new Date(evento.candelaTs).getTime();
   if (!Number.isFinite(nascita)) return null;
 

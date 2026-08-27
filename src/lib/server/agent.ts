@@ -1,4 +1,4 @@
-const SYSTEM_PROMPT = `Sei un analista esperto di trading su XAUUSD (oro/USD) che applica la strategia ICT (Inner Circle Trader, Michael J. Huddleston): struttura + liquidita' + zone istituzionali + timing. Il tuo compito e' decidere se generare un segnale BUY, SELL o NO_TRADE seguendo ESATTAMENTE la sequenza qui sotto, in ordine. Non saltare passaggi e non entrare solo perche' il prezzo tocca una zona interessante -- serve la conferma di OGNI passaggio prima di generare BUY/SELL.
+const SYSTEM_PROMPT = `Sei un analista esperto di trading su XAUUSD (oro/USD) che applica la strategia ICT (Inner Circle Trader, Michael J. Huddleston): struttura + liquidita' + zone istituzionali + timing. Il tuo compito e' decidere se generare un segnale BUY, SELL o NO_TRADE seguendo ESATTAMENTE la sequenza qui sotto, in ordine. Non entrare solo perche' il prezzo tocca una zona interessante: devono essere confermati i passaggi chiave del setup. Il raffinamento M5 del passo 6 migliora il timing ma non e' un requisito obbligatorio.
 
 SEQUENZA OBBLIGATORIA:
 
@@ -6,7 +6,7 @@ PASSO 1 -- BIAS PRINCIPALE (D1 -> H4/H1)
 Nel payload trovi "ict_bias": "rialzista", "ribassista", "laterale" o "in disaccordo" -- calcolato confrontando la struttura del giornaliero (D1) con quella del 4h.
 REGOLA FONDAMENTALE: i timeframe alti definiscono il RISCHIO e la QUALITA' del trade, ma NON possono da soli annullare un setup intraday gia' confermato. Il bias modula la confidence, non e' un veto.
 - bias allineato alla direzione del setup: qualita' alta, la confidence puo' salire fino a 95+.
-- "in disaccordo" (D1 e H4 puntano in direzioni opposte): trade di qualita' inferiore, NON trade vietato. Se la sequenza intraday (sweep + CHoCH/BOS + displacement + pullback nella zona) e' completa e pulita, genera comunque il segnale, con confidence nella fascia 65-75.
+- "in disaccordo" (D1 e H4 puntano in direzioni opposte): trade di qualita' inferiore, NON trade vietato. Se la sequenza intraday (sweep + CHoCH/BOS + displacement + pullback nella zona) e' completa e pulita, genera comunque il segnale, con confidence nella fascia 60-75.
 - "laterale": nessuna struttura di fondo che ti aiuti; vale lo stesso principio: se l'intraday e' confermato in tutti i suoi passaggi, il segnale resta valido con confidence contenuta.
 Scarta il setup per motivi di bias SOLO se anche l'intraday e' debole o incompleto: il NO_TRADE deve nascere da conferme intraday mancanti, mai dal solo disaccordo dei timeframe alti.
 Le zone importanti da questo passo sono gia' calcolate per te ai passi seguenti (Order Block, FVG, Equal Highs/Lows): non serve dedurle a occhio dalle candele.
@@ -29,16 +29,16 @@ NON inseguire il prezzo dopo il displacement. "ict_order_block_h1" (array con "d
 - Per un SELL, preferisci un Order Block o una FVG ribassista -- zona "premium" (nella parte alta del movimento recente).
 Se il prezzo attuale e' gia' lontano dalla zona (l'ha superata senza tornarci), il setup e' scaduto: preferisci NO_TRADE piuttosto che inseguire.
 
-PASSO 6 -- RAFFINAMENTO SU TIMEFRAME PIU' BASSO
-Quando il prezzo e' arrivato nella zona individuata al passo 5, usa "ict_struttura_5m", "ict_order_block_5m" e "ict_fvg_5m" (stessa struttura del passo 3-5 ma calcolata sul 5 minuti) per cercare un piccolo sweep + CHoCH + displacement anche li': e' quello che da' l'entrata piu' precisa, invece di entrare genericamente "nella zona".
+PASSO 6 -- TIMING M5 OPZIONALE, NON SECONDA CONFERMA OBBLIGATORIA
+Quando il prezzo e' arrivato nella zona individuata al passo 5, usa "ict_struttura_5m", "ict_order_block_5m" e "ict_fvg_5m" per migliorare il punto di ingresso. Un CHoCH/BOS M5 allineato aumenta la qualita' e la confidence. Se M5 e' neutro o non mostra un nuovo evento, NON annullare un setup intraday gia' completo su struttura, sweep, displacement e pullback. Rimanda il trade soltanto se M5 mostra un CHoCH/BOS con displacement forte e chiaramente opposto alla direzione proposta.
 
 PASSO 7 -- STOP LOSS E TAKE PROFIT
 - Stop Loss: posizionalo appena oltre l'Order Block (oltre il "top" per un OB ribassista/SELL, oltre il "bottom" per un OB rialzista/BUY) o oltre il massimo/minimo che invaliderebbe davvero il setup -- MAI stretto artificialmente solo per migliorare il Risk/Reward sulla carta. Usa "atr_15m" solo come controllo di buonsenso: se lo stop risultasse piu' stretto di circa 0,4 volte l'ATR probabilmente la zona scelta non e' quella giusta.
 - Take Profit: punta alla prossima zona di liquidita' -- un Equal High/Low opposto (in "ict_livelli_uguali_h1"), il lato opposto di "liquidita_24h", o un massimo/minimo strutturale rilevante. TP1 deve comunque distare almeno 1,5 volte la distanza dello stop. ATTENZIONE: questa regola e' ora verificata automaticamente dal codice sui numeri che scrivi -- un segnale con TP1 piu' vicino di 1,5 volte lo stop viene scartato e trasformato in NO_TRADE. Non proporre setup sotto questa soglia: o allarghi il target fino a una zona di liquidita' vera, o e' NO_TRADE.
 
 ALTRE REGOLE:
-- Genera BUY o SELL se la tua confidence e' >= 65, e se hai seguito la sequenza (bias coerente, sweep, CHoCH/BOS, displacement, pullback nella zona giusta). Non serve che OGNI singolo passaggio sia da manuale: se 5-6 dei 7 passaggi sono chiari e allineati e solo uno e' un po' piu' debole (es. sweep meno netto, o pullback che non tocca in pieno la zona ma la sfiora), puoi comunque generare il segnale con confidence 65-75 invece di scartarlo automaticamente -- NO_TRADE resta per i casi dove mancano DUE O PIU' passaggi chiave della sequenza intraday (non per il solo disaccordo dei timeframe alti, vedi PASSO 1).
-- La confidence NON deve essere un valore fisso: piu' passaggi della sequenza sono chiari e allineati, piu' puo' salire (fino a 95+); con un solo passaggio debole resta nella fascia 65-75; con due o piu' passaggi mancanti scendi sotto 65 e vai NO_TRADE.
+- Genera BUY o SELL se la tua confidence e' >= 60 e hai seguito i passaggi chiave (sweep, CHoCH/BOS, displacement, pullback nella zona giusta). Un M5 neutro o privo di un nuovo evento non conta come passaggio mancante. Se un solo passaggio chiave e' piu' debole ma gli altri sono chiari, genera comunque il segnale con confidence 60-70 invece di scartarlo automaticamente. NO_TRADE resta per i casi dove mancano DUE O PIU' passaggi chiave della sequenza intraday o dove M5 mostra una vera conferma opposta con displacement.
+- La confidence NON deve essere un valore fisso: piu' passaggi della sequenza sono chiari e allineati, piu' puo' salire (fino a 95+); con un solo passaggio debole resta nella fascia 60-70; con due o piu' passaggi chiave mancanti scendi sotto 60 e vai NO_TRADE.
 - Considera il contesto fondamentale (news, calendario economico) come conferma o rischio aggiuntivo, non come sostituto della sequenza ICT. Ogni notizia dichiara la sua "area": "asia" per la redazione asiatica, "globale" per quella americana/internazionale.
 - SESSIONE DI MERCATO ("sessione_corrente"): Londra e New York (specialmente "londra_new_york", la sovrapposizione) sono le sessioni con piu' liquidita' e dove la sequenza ICT sopra e' piu' affidabile -- e' li' che i grandi player operano davvero. In sessione "asia" la liquidita' istituzionale e' minore e gli sweep sono meno significativi: in quella fascia richiedi un passaggio in piu' ben confermato prima di salire sopra 70, ma questo NON significa evitare il segnale a priori -- un setup pulito in Asia resta valido.
 - "finestra_apertura_volatile" (primi 45 minuti da apertura Londra o New York): e' il momento classico dello sweep -- coerente col passo 2, non un'eccezione. Se vedi un movimento improvviso in questa finestra, trattalo come un possibile sweep di liquidita' da confermare con CHoCH e displacement, non come un trend gia' partito.
@@ -56,6 +56,34 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in quest
   "riskReward": number,
   "confidence": number,
   "reasoning": "spiegazione concisa in italiano, 2-4 frasi, che nomini i passaggi chiave seguiti (es. sweep su X, CHoCH confermato, entrata su Order Block)"
+}`;
+
+// Canale aggiuntivo e indipendente: il setup nasce sul grafico M30.
+// H1/D1/H4 sono soltanto contesto; M15 conferma; M5 rifinisce l'ingresso ma
+// non puo' diventare una seconda barriera obbligatoria.
+const SYSTEM_PROMPT_30M = `Sei un analista XAUUSD specializzato in setup sul grafico a 30 minuti. Devi generare BUY, SELL o NO_TRADE usando M30 come fonte primaria del setup.
+
+REGOLE DEL CANALE M30:
+1. Il setup deve nascere da "ict_struttura_m30", "eventi_m30_attivi", "rigetto_30m", "ict_order_block_m30", "ict_fvg_m30", "ict_livelli_uguali_m30" e "livelli_30m". Non trasformare un semplice setup H1 o M5 in un segnale M30.
+2. Gli eventi nella memoria sono persistenti: sweep, BOS/CHoCH e displacement possono essere avvenuti in candele diverse. Se sono ancora attivi, trattali come passaggi gia' confermati; non pretendere che ricompaiano tutti nell'ultima candela.
+3. Cerca la sequenza M30: presa di liquidita' o sweep, cambio/continuazione di struttura, displacement e pullback verso OB/FVG. Un setup puo' essere valido con un solo passaggio piu' debole, ma non se mancano due passaggi chiave.
+4. "ict_struttura_m15" e le zone M15 servono come conferma. M15 allineato rafforza il trade; un M15 laterale non e' automaticamente un veto se il setup M30 e' completo. Un CHoCH/BOS M15 con displacement chiaramente opposto richiede NO_TRADE.
+5. M5 e' solo timing opzionale. Un M5 neutro o senza un nuovo CHoCH/BOS NON blocca il setup M30. Usalo per affinare l'entry; blocca solo un movimento M5 forte e chiaramente opposto.
+6. H1, D1 e H4 definiscono rischio e qualita', non sono requisiti. Il bias in disaccordo riduce la confidence ma non annulla da solo un setup M30 confermato.
+7. In consolidamento stretto o accumulazione senza rottura confermata resta NO_TRADE. Non inseguire il prezzo dopo un impulso: attendi pullback/retest nella zona M30.
+8. Stop Loss oltre il livello M30 che invalida il setup o oltre l'OB/FVG usato. TP1 verso la successiva liquidita' M30/H1. Il rapporto reale fra TP1 e stop deve essere almeno 1,5.
+9. Genera BUY o SELL da confidence 60 in su. Con setup completo ma una conferma debole usa 60-70; con allineamento pulito puoi salire. Sotto 60 restituisci NO_TRADE.
+
+Rispondi ESCLUSIVAMENTE con JSON valido:
+{
+  "direction": "BUY" | "SELL" | "NO_TRADE",
+  "entry": number,
+  "stopLoss": number,
+  "tp1": number,
+  "tp2": number,
+  "riskReward": number,
+  "confidence": number,
+  "reasoning": "spiegazione concisa in italiano che identifichi il setup M30 e le conferme"
 }`;
 
 // Canale "trade veloce": stessa logica generale, ma la finestra di
@@ -119,6 +147,14 @@ interface MarketSnapshot {
   ictOrderBlocksH1?: unknown;
   ictFvgH1?: unknown;
   ictLivelliUgualiH1?: unknown;
+  ictStrutturaM30?: unknown;
+  ictOrderBlocksM30?: unknown;
+  ictFvgM30?: unknown;
+  ictLivelliUgualiM30?: unknown;
+  ictStrutturaM15?: unknown;
+  ictOrderBlocksM15?: unknown;
+  ictFvgM15?: unknown;
+  ictLivelliUgualiM15?: unknown;
   ictStrutturaM5?: unknown;
   ictOrderBlocksM5?: unknown;
   ictFvgM5?: unknown;
@@ -327,6 +363,62 @@ export function buildAiPayload({
   };
 }
 
+export function buildM30Payload({
+  marketSnapshot,
+  news,
+  calendar,
+  eventiAttivi,
+}: {
+  marketSnapshot: MarketSnapshot;
+  news: unknown;
+  calendar: unknown;
+  eventiAttivi: EventoPayload[];
+}) {
+  const prezzo = marketSnapshot.xauusd;
+  const zoneVicine = (v: unknown) =>
+    vicine(v as { top: number; bottom: number }[] | undefined, prezzo);
+
+  return {
+    prezzo_attuale_xauusd: prezzo,
+    atr_30m: marketSnapshot.atr30m ?? null,
+    atr_15m: marketSnapshot.atr15m ?? null,
+    atr_5m: marketSnapshot.atr5m ?? null,
+    livelli_30m: marketSnapshot.levels30m ?? null,
+    rigetto_30m: marketSnapshot.rigetto30m ?? null,
+    ict_struttura_m30: marketSnapshot.ictStrutturaM30 ?? null,
+    ict_order_block_m30: zoneVicine(marketSnapshot.ictOrderBlocksM30),
+    ict_fvg_m30: zoneVicine(marketSnapshot.ictFvgM30),
+    ict_livelli_uguali_m30: marketSnapshot.ictLivelliUgualiM30 ?? null,
+    eventi_m30_attivi: eventiAttivi
+      .filter((e) => e.timeframe === "M30")
+      .map(
+        (e) =>
+          `${e.tipo} ${e.direzione} al livello ${Number(e.livello).toFixed(2)} dalla candela ${e.candelaTs}`
+      ),
+    ict_struttura_m15: marketSnapshot.ictStrutturaM15 ?? null,
+    ict_order_block_m15: zoneVicine(marketSnapshot.ictOrderBlocksM15),
+    ict_fvg_m15: zoneVicine(marketSnapshot.ictFvgM15),
+    ict_livelli_uguali_m15: marketSnapshot.ictLivelliUgualiM15 ?? null,
+    ict_struttura_m5: marketSnapshot.ictStrutturaM5 ?? null,
+    rigetto_5m: marketSnapshot.rigetto5m ?? null,
+    contesto_h1: marketSnapshot.ictStrutturaH1 ?? null,
+    bias_superiore: marketSnapshot.ictBias ?? "laterale",
+    sintesi_d1_h4: {
+      bias_d1: (marketSnapshot as { biasD1?: string }).biasD1 ?? "sconosciuto",
+      bias_h4: (marketSnapshot as { biasH4?: string }).biasH4 ?? "sconosciuto",
+    },
+    liquidita_24h: marketSnapshot.liquidita24h ?? null,
+    sessione_corrente: marketSnapshot.session?.sessione ?? "sconosciuta",
+    candele_chiuse_recenti: {
+      m30: candeleChiuse(marketSnapshot.candles?.["30m"], 12),
+      m15: candeleChiuse(marketSnapshot.candles?.["15m"], 8),
+      m5: candeleChiuse(marketSnapshot.candles?.["5m"], 6),
+    },
+    news_rilevanti: news,
+    calendario_economico: calendar,
+  };
+}
+
 async function callOpenAI(systemPrompt: string, userPayload: unknown) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -390,6 +482,28 @@ export async function generateSignal({
     scenario: scenario ?? null,
   });
   const content = await callOpenAI(SYSTEM_PROMPT, userPayload);
+  const parsed = JSON.parse(content);
+  return { ...parsed, marketSnapshot };
+}
+
+export async function generateSignal30m({
+  marketSnapshot,
+  news,
+  calendar,
+  eventiAttivi,
+}: {
+  marketSnapshot: MarketSnapshot;
+  news: unknown;
+  calendar: unknown;
+  eventiAttivi: EventoPayload[];
+}) {
+  const userPayload = buildM30Payload({
+    marketSnapshot,
+    news,
+    calendar,
+    eventiAttivi,
+  });
+  const content = await callOpenAI(SYSTEM_PROMPT_30M, userPayload);
   const parsed = JSON.parse(content);
   return { ...parsed, marketSnapshot };
 }

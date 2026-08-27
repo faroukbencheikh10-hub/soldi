@@ -213,7 +213,8 @@ function normalizzaCandeleTwelveData(grezze: unknown, etichetta: string): Candle
   return scartaCandeleNelFuturo(out, `${etichetta} (twelvedata)`);
 }
 
-interface MarketSnapshot {
+export interface MarketSnapshot {
+  [key: string]: unknown;
   xauusd: number;
   xauusdChangePct: number;
   xauusdQuotedAt: number | null;
@@ -246,10 +247,14 @@ interface MarketSnapshot {
   ictFvgH1: FVG[];
   ictLivelliUgualiH1: LivelliUguali;
   ictStrutturaM30: StructureResult;
+  ictStrutturaM15: StructureResult;
   ictStrutturaM5: StructureResult;
   ictOrderBlocksM30: OrderBlock[];
   ictFvgM30: FVG[];
   ictLivelliUgualiM30: LivelliUguali;
+  ictOrderBlocksM15: OrderBlock[];
+  ictFvgM15: FVG[];
+  ictLivelliUgualiM15: LivelliUguali;
   ictOrderBlocksM5: OrderBlock[];
   ictFvgM5: FVG[];
 }
@@ -350,10 +355,14 @@ async function tryTwelveData(): Promise<MarketSnapshot | null> {
     ictFvgH1: computeFVG(c1h),
     ictLivelliUgualiH1: computeEqualLevels(c1h, atr1h),
     ictStrutturaM30: computeStructure(c30 ?? []),
+    ictStrutturaM15: computeStructure(c15),
     ictStrutturaM5: computeStructure(c5),
     ictOrderBlocksM30: computeOrderBlocks(c30 ?? []),
     ictFvgM30: computeFVG(c30 ?? []),
     ictLivelliUgualiM30: computeEqualLevels(c30 ?? [], atr30),
+    ictOrderBlocksM15: computeOrderBlocks(c15),
+    ictFvgM15: computeFVG(c15),
+    ictLivelliUgualiM15: computeEqualLevels(c15, atr15),
     ictOrderBlocksM5: computeOrderBlocks(c5),
     ictFvgM5: computeFVG(c5),
   };
@@ -441,10 +450,14 @@ async function tryMetaApi(): Promise<MarketSnapshot | null> {
     ictFvgH1: computeFVG(c1h),
     ictLivelliUgualiH1: computeEqualLevels(c1h, atr1h),
     ictStrutturaM30: computeStructure(c30 ?? []),
+    ictStrutturaM15: computeStructure(c15),
     ictStrutturaM5: computeStructure(c5),
     ictOrderBlocksM30: computeOrderBlocks(c30 ?? []),
     ictFvgM30: computeFVG(c30 ?? []),
     ictLivelliUgualiM30: computeEqualLevels(c30 ?? [], atr30),
+    ictOrderBlocksM15: computeOrderBlocks(c15),
+    ictFvgM15: computeFVG(c15),
+    ictLivelliUgualiM15: computeEqualLevels(c15, atr15),
     ictOrderBlocksM5: computeOrderBlocks(c5),
     ictFvgM5: computeFVG(c5),
   };

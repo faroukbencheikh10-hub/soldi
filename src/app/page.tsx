@@ -15,6 +15,7 @@ import {
   getSignalHistory,
   getStats,
   getLatestSignal,
+  getSignalHistory30m,
 } from "@/lib/server/db";
 import { SignalWatcher } from "@/components/signal-watcher";
 
@@ -44,6 +45,7 @@ export default async function Home() {
   let historyRows: any[] = [];
   let statsRow: any = null;
   let latestSignalRow: any = null;
+  let history30mRows: any[] = [];
   let dbError = false;
 
   try {
@@ -53,12 +55,14 @@ export default async function Home() {
       historyRows,
       statsRow,
       latestSignalRow,
+      history30mRows,
     ] = await Promise.all([
       getLatestMarketSnapshot(),
       getLatestContextSnapshot(),
       getSignalHistory(20),
       getStats(),
       getLatestSignal(),
+      getSignalHistory30m(20),
     ]);
   } catch {
     dbError = true;
@@ -69,6 +73,7 @@ export default async function Home() {
   const currentSignal: TradeSignal | null = hasLiveSignals
     ? mapSignalRow(latestSignalRow)
     : DEMO_HISTORY[0] ?? null;
+  const signalHistory30m: TradeSignal[] = history30mRows.map(mapSignalRow);
 
   const SNAPSHOT_STALE_MINUTES = 20;
   const snapshotAgeMinutes = marketSnapshot?.created_at
@@ -129,6 +134,7 @@ export default async function Home() {
           <div className="space-y-5">
             <ChartPanel />
             <SignalHistory signals={signalHistory} />
+            <SignalHistory signals={signalHistory30m} title="Storico setup M30" />
           </div>
 
           <div className="space-y-5">

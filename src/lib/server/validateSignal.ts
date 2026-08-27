@@ -30,7 +30,11 @@ function normalizeDirection(raw: string): "BUY" | "SELL" | "NO_TRADE" | null {
   return null;
 }
 
-export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "atr15m"): ValidatedSignal {
+export function validateSignal(
+  raw: RawSignal,
+  atrField: "atr15m" | "atr5m" | "atr30m" = "atr15m",
+  minConfidence = 0
+): ValidatedSignal {
   const normalized = normalizeDirection(raw.direction);
 
   if (normalized === null) {
@@ -50,6 +54,20 @@ export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "a
     return { ...raw, direction: "NO_TRADE" };
   }
 
+  const confidence = Number(raw.confidence);
+  if (!Number.isFinite(confidence) || confidence < minConfidence) {
+    return {
+      ...raw,
+      direction: "NO_TRADE",
+      entry: 0,
+      stopLoss: 0,
+      tp1: 0,
+      tp2: 0,
+      riskReward: 0,
+      rejectedReason: `${normalized} scartato: confidence ${Number.isFinite(confidence) ? confidence : "non valida"}, sotto il minimo ${minConfidence}`,
+    };
+  }
+
   const { entry, stopLoss, tp1 } = raw;
 
   if (entry === null || stopLoss === null || tp1 === null) {
@@ -65,7 +83,11 @@ export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "a
     };
   }
 
-  const snapshot = raw.marketSnapshot as { atr15m?: number | null; atr5m?: number | null } | undefined;
+  const snapshot = raw.marketSnapshot as {
+    atr15m?: number | null;
+    atr5m?: number | null;
+    atr30m?: number | null;
+  } | undefined;
   const atr = snapshot?.[atrField] ?? null;
   const stopDistance = Math.abs(entry - stopLoss);
   const stopAtrRatio =
