@@ -189,11 +189,21 @@ export async function runAnalysis(options?: { force?: boolean }) {
   const marketSnapshot = await getMarketSnapshot();
 
   if (hasOpenTrade && !naturalOutcome && !expired && force) {
+    // Prima qui si registrava sempre 0: 21 dei 24 "BREAKEVEN" erano in realta'
+    // trade interrotti a meta' volo, in media dopo 21 minuti, e falsavano meta'
+    // del campione. Ora si registra il risultato reale al momento del click,
+    // come gia' avviene alla scadenza delle 4 ore.
+    const resultR =
+      currentPrice !== null && risk > 0
+        ? Number(
+            ((latest!.direction === "BUY" ? currentPrice - entry : entry - currentPrice) / risk).toFixed(2)
+          )
+        : 0;
     const note =
       currentPrice === null
-        ? "\n\n[Chiuso manualmente: nuova generazione richiesta dall'utente, prezzo attuale non verificabile.]"
-        : "\n\n[Chiuso manualmente: sostituito da una nuova generazione richiesta dall'utente.]";
-    await closeSignal(latest!.id, "BREAKEVEN", 0, note);
+        ? "\n\n[Chiuso manualmente: nuova generazione richiesta dall'utente, prezzo attuale non verificabile, risultato non misurabile.]"
+        : "\n\n[Chiuso manualmente: sostituito da una nuova generazione richiesta dall'utente. Risultato reale " + resultR + "R al momento della chiusura.]";
+    await closeSignal(latest!.id, "BREAKEVEN", resultR, note);
   }
 
   // ======================= MONITOR (gira a ogni ciclo) ====================

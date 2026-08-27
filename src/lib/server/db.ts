@@ -295,10 +295,10 @@ export async function getStats() {
   const client = getPool();
   const res = await client.query(`
     SELECT
-      COUNT(*) FILTER (WHERE is_demo = false) AS total,
+      COUNT(*) FILTER (WHERE is_demo = false AND direction <> 'NO_TRADE') AS total,
       COUNT(*) FILTER (WHERE is_demo = false AND outcome = 'WIN') AS wins,
       COUNT(*) FILTER (WHERE is_demo = false AND outcome IN ('WIN','LOSS')) AS decided,
-      AVG(risk_reward) FILTER (WHERE is_demo = false) AS avg_rr
+      AVG(risk_reward) FILTER (WHERE is_demo = false AND direction <> 'NO_TRADE' AND risk_reward > 0) AS avg_rr
     FROM signals
   `);
   return res.rows[0];
@@ -387,7 +387,7 @@ export async function getStats5m() {
       COUNT(*) FILTER (WHERE is_demo = false AND direction != 'NO_TRADE') AS total,
       COUNT(*) FILTER (WHERE is_demo = false AND outcome = 'WIN') AS wins,
       COUNT(*) FILTER (WHERE is_demo = false AND outcome IN ('WIN','LOSS')) AS decided,
-      AVG(risk_reward) FILTER (WHERE is_demo = false) AS avg_rr
+      AVG(risk_reward) FILTER (WHERE is_demo = false AND direction <> 'NO_TRADE' AND risk_reward > 0) AS avg_rr
     FROM signals_5m
   `);
   return res.rows[0];
