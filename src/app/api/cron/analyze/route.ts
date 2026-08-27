@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runAnalysis, runAnalysis30m } from "@/lib/server/runAnalysis";
-import { getMarketSnapshot, isMarketOpen } from "@/lib/server/marketData";
+import { runAnalysis } from "@/lib/server/runAnalysis";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -19,35 +18,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    if (!isMarketOpen()) {
-      return NextResponse.json({ ok: true, skipped: true, reason: "market_closed" });
-    }
-
-    // Un solo snapshot alimenta entrambi i canali: nessun raddoppio delle
-    // chiamate a MetaApi/Twelve Data.
-    const marketSnapshot = await getMarketSnapshot();
-    const oro = await runAnalysis({ marketSnapshot }).catch((err) => {
-      console.error("[cron/analyze] errore canale principale:", err);
-      return {
-        channelError: true,
-        error: err instanceof Error ? err.message : "Errore sconosciuto",
-      };
-    });
-    const m30 = await runAnalysis30m({ marketSnapshot }).catch((err) => {
-      console.error("[cron/analyze] errore canale M30:", err);
-      return {
-        channelError: true,
-        error: err instanceof Error ? err.message : "Errore sconosciuto",
-      };
-    });
-
-    // I campi storici del canale principale restano al primo livello per non
-    // rompere chi gia' legge questa route; il nuovo canale e' sotto "m30".
-    const entrambiFalliti = "channelError" in oro && "channelError" in m30;
-    return NextResponse.json(
-      { ok: !entrambiFalliti, ...oro, m30 },
-      { status: entrambiFalliti ? 500 : 200 }
-    );
+    const oro = await runAnalysis();
+    return NextResponse.json({ ok: true, ...oro });
   } catch (err) {
     console.error("[cron/analyze] errore oro:", err);
     return NextResponse.json(

@@ -16,22 +16,12 @@ import {
   getUltimoContesto,
   getEventiSetupAttivi,
   chiudiEventoSetup,
-  insertSignal30m,
-  getLatestSignal30m,
-  hasTradedSetup30m,
-  getOpenSignalsOtherChannels,
-  closeSignal30m,
 } from "@/lib/server/db";
-import {
-  getMarketSnapshot,
-  getCurrentPrice,
-  isMarketOpen,
-  type MarketSnapshot,
-} from "@/lib/server/marketData";
+import { getMarketSnapshot, getCurrentPrice, isMarketOpen } from "@/lib/server/marketData";
 import { metaApiFetchTimeSeries } from "@/lib/server/metaApiData";
 import { getRelevantNews } from "@/lib/server/news";
 import { getEconomicCalendar } from "@/lib/server/calendar";
-import { generateSignal, generateSignal30m, generateSignal5m } from "@/lib/server/agent";
+import { generateSignal, generateSignal5m } from "@/lib/server/agent";
 import { validateSignal } from "@/lib/server/validateSignal";
 import { sendPushToAll } from "@/lib/server/pushSend";
 import { shouldCallAI, hasTechnicalSetup } from "@/lib/server/aiGate";
@@ -61,7 +51,6 @@ const SIGNAL_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const INTERVALLO_MINIMO_AI_MS = 60 * 1000;
 const INTERVALLO_SNAPSHOT_MS = 5 * 60 * 1000;
 const SIGNAL_TIMEOUT_MS_5M = 60 * 60 * 1000;
-const SIGNAL_TIMEOUT_MS_30M = 8 * 60 * 60 * 1000;
 // Filtro tecnico locale: quanti segnali tecnici servono per giustificare una
 // chiamata a OpenAI sul canale oro.
 const SOGLIA_SETUP_ORO = 1;
@@ -74,10 +63,9 @@ async function esitoDalleCandele(
   direzione: string,
   apertoIl: string | Date,
   stopLoss: number,
-  tp1: number,
-  numeroCandele = 60
+  tp1: number
 ): Promise<"WIN" | "LOSS" | null> {
-  const candele = await metaApiFetchTimeSeries("5min", numeroCandele);
+  const candele = await metaApiFetchTimeSeries("5min", 60);
   if (!candele || candele.length === 0) return null;
 
   const apertura = new Date(apertoIl).getTime();
@@ -104,7 +92,7 @@ async function esitoDalleCandele(
   return null;
 }
 
-export async function runAnalysis(options?: { force?: boolean; marketSnapshot?: MarketSnapshot }) {
+export async function runAnalysis(options?: { force?: boolean }) {
   const force = options?.force ?? false;
 
   if (!isMarketOpen()) {
@@ -180,7 +168,7 @@ export async function runAnalysis(options?: { force?: boolean; marketSnapshot?: 
         );
       } else if (!force) {
         try {
-          const freshSnapshot = options?.marketSnapshot ?? (await getMarketSnapshot());
+          const freshSnapshot = await getMarketSnapshot();
           await insertMarketSnapshot(freshSnapshot);
         } catch (err) {
           console.error("[runAnalysis] snapshot di aggiornamento (trade aperto) fallito:", err);
@@ -198,7 +186,7 @@ export async function runAnalysis(options?: { force?: boolean; marketSnapshot?: 
     }
   }
 
-  const marketSnapshot = options?.marketSnapshot ?? (await getMarketSnapshot());
+  const marketSnapshot = await getMarketSnapshot();
 
   if (hasOpenTrade && !naturalOutcome && !expired && force) {
     const note =
@@ -326,8 +314,6 @@ export async function runAnalysis(options?: { force?: boolean; marketSnapshot?: 
   const zonaRaggiunta = prezzoDentroUnaZona(marketSnapshot.xauusd, [
     marketSnapshot.ictOrderBlocksH1,
     marketSnapshot.ictFvgH1,
-    marketSnapshot.ictOrderBlocksM30,
-    marketSnapshot.ictFvgM30,
     marketSnapshot.ictOrderBlocksM5,
     marketSnapshot.ictFvgM5,
   ]);
@@ -479,7 +465,7 @@ export async function runAnalysis(options?: { force?: boolean; marketSnapshot?: 
     eventiAttivi: eventiPerContesto,
     scenario: null,
   });
-  const signal = validateSignal(rawSignal, "atr15m", 60);
+  const signal = validateSignal(rawSignal);
   const saved = await insertSignal(signal);
   await setSetting("setup_last_signal_id", saved.id);
 
@@ -506,264 +492,6 @@ export async function runAnalysis(options?: { force?: boolean; marketSnapshot?: 
     calendarCount: calendar.length,
     dataSource: marketSnapshot.source,
     rejectedReason: signal.rejectedReason ?? null,
-  };
-}
-
-export async function runAnalysis30m(options?: { marketSnapshot?: MarketSnapshot }) {
-  if (!isMarketOpen()) {
-    return { skipped: true, reason: "market_closed" };
-  }
-
-  await ensureSchema();
-
-  if (await isAiPaused()) {
-    return { skipped: true, reason: "ai_paused" };
-  }
-
-  const latest = await getLatestSignal30m();
-  const hasOpenTrade =
-    latest && (latest.direction === "BUY" || latest.direction === "SELL") && !latest.outcome;
-
-  if (hasOpenTrade) {
-    const currentPrice = await getCurrentPrice();
-    const entry = Number(latest.entry);
-    const stopLoss = Number(latest.stop_loss);
-    const tp1 = Number(latest.tp1);
-    const risk = Math.abs(entry - stopLoss);
-
-    let naturalOutcome = await esitoDalleCandele(
-      latest.direction,
-      latest.created_at,
-      stopLoss,
-      tp1,
-      120
-    );
-
-    if (naturalOutcome === null && currentPrice !== null) {
-      if (latest.direction === "BUY") {
-        if (currentPrice <= stopLoss) naturalOutcome = "LOSS";
-        else if (currentPrice >= tp1) naturalOutcome = "WIN";
-      } else {
-        if (currentPrice >= stopLoss) naturalOutcome = "LOSS";
-        else if (currentPrice <= tp1) naturalOutcome = "WIN";
-      }
-    }
-
-    if (naturalOutcome) {
-      const resultR =
-        naturalOutcome === "WIN" && risk > 0 ? Math.abs(tp1 - entry) / risk : -1;
-      await closeSignal30m(latest.id, naturalOutcome, resultR);
-    } else {
-      const ageMs = Date.now() - new Date(latest.created_at).getTime();
-      if (ageMs <= SIGNAL_TIMEOUT_MS_30M) {
-        return {
-          skipped: true,
-          reason: "signal_30m_active",
-          activeSignalId: latest.id,
-          direction: latest.direction,
-          entry,
-          currentPrice: currentPrice ?? undefined,
-        };
-      }
-
-      const resultR =
-        currentPrice !== null && risk > 0
-          ? Number(
-              ((latest.direction === "BUY" ? currentPrice - entry : entry - currentPrice) / risk).toFixed(2)
-            )
-          : 0;
-      await closeSignal30m(
-        latest.id,
-        "BREAKEVEN",
-        resultR,
-        `\n\n[Scaduto: nessun SL/TP toccato entro 8 ore. Risultato reale ${resultR}R.]`
-      );
-    }
-  }
-
-  const marketSnapshot = options?.marketSnapshot ?? (await getMarketSnapshot());
-
-  // Il canale M30 possiede la propria lettura della memoria: continua a
-  // funzionare anche quando un segnale del canale principale e' gia' aperto.
-  await inserisciEventiSetup(
-    rilevaEventi(marketSnapshot.candles["30m"], marketSnapshot.atr30m, "M30")
-  );
-
-  const eventiM30: EventoAttivo[] = [];
-  const adesso = Date.now();
-
-  for (const riga of await getEventiSetupAttivi()) {
-    if (riga.timeframe !== "M30") continue;
-    const evento: EventoAttivo = {
-      id: String(riga.id),
-      tipo: riga.tipo,
-      timeframe: "M30",
-      direzione: riga.direzione,
-      livello: Number(riga.livello),
-      candelaTs: new Date(riga.candela_ts).toISOString(),
-      rilevatoIl: new Date(riga.rilevato_il).toISOString(),
-    };
-
-    const motivo = motivoInvalidazione(evento, marketSnapshot.candles["30m"]);
-    if (motivo) {
-      await chiudiEventoSetup(evento.id, "INVALIDATED", motivo);
-      continue;
-    }
-    if (eventoScaduto(evento, adesso)) {
-      await chiudiEventoSetup(evento.id, "EXPIRED", "tetto di sicurezza M30 superato");
-      continue;
-    }
-    eventiM30.push(evento);
-  }
-
-  const zonaM30Raggiunta = prezzoDentroUnaZona(marketSnapshot.xauusd, [
-    marketSnapshot.ictOrderBlocksM30,
-    marketSnapshot.ictFvgM30,
-  ]);
-  const strutturaM30 = marketSnapshot.ictStrutturaM30;
-  const strutturaM15 = marketSnapshot.ictStrutturaM15;
-  const fingerprint = [
-    calcolaFingerprint(eventiM30, marketSnapshot.xauusd, marketSnapshot.atr30m, zonaM30Raggiunta),
-    `m30=${strutturaM30.evento ?? "none"}:${strutturaM30.direzioneEvento ?? strutturaM30.bias}:${strutturaM30.livelloRotto ?? "none"}`,
-    `m15=${strutturaM15.evento ?? "none"}:${strutturaM15.direzioneEvento ?? strutturaM15.bias}`,
-    `rigetto=${marketSnapshot.rigetto30m.rilevato ? marketSnapshot.rigetto30m.direzione ?? "si" : "no"}`,
-  ].join("#");
-
-  const fingerprintPrecedente = await getSetting("m30_setup_fingerprint");
-  if (fingerprint === fingerprintPrecedente) {
-    return {
-      skipped: true,
-      reason: "setup_30m_invariato",
-      eventiAttivi: eventiM30.length,
-      zonaRaggiunta: zonaM30Raggiunta,
-    };
-  }
-  await setSetting("m30_setup_fingerprint", fingerprint);
-
-  if (eventiM30.length === 0) {
-    const noSetup = validateSignal({
-      direction: "NO_TRADE",
-      entry: null,
-      stopLoss: null,
-      tp1: null,
-      tp2: null,
-      riskReward: null,
-      confidence: 0,
-      reasoning: "Nessun evento M30 attivo nella memoria del setup.",
-    });
-    const saved = await insertSignal30m(noSetup, null);
-    return {
-      signalId: saved.id,
-      direction: noSetup.direction,
-      confidence: noSetup.confidence,
-      aiSkipped: true,
-      reason: "nessun_evento_m30_attivo",
-    };
-  }
-
-  const ultimaAi = await getSetting("m30_last_ai_at");
-  if (ultimaAi && adesso - new Date(ultimaAi).getTime() < INTERVALLO_MINIMO_AI_MS) {
-    return { skipped: true, reason: "ai_30m_troppo_ravvicinata" };
-  }
-  await setSetting("m30_last_ai_at", new Date().toISOString());
-
-  const [news, calendar] = await Promise.all([
-    getRelevantNews().catch(() => []),
-    getEconomicCalendar().catch(() => []),
-  ]);
-
-  const eventiPayload: EventoContesto[] = eventiM30.map((e) => ({
-    id: e.id,
-    tipo: e.tipo,
-    timeframe: e.timeframe,
-    direzione: e.direzione,
-    livello: e.livello,
-    candelaTs: e.candelaTs,
-  }));
-
-  const rawSignal = await generateSignal30m({
-    marketSnapshot,
-    news,
-    calendar,
-    eventiAttivi: eventiPayload,
-  });
-  let signal = validateSignal(rawSignal, "atr30m", 60);
-
-  const setupBase = eventiM30
-    .map((e) => `${e.tipo}:${e.direzione}:${e.candelaTs}`)
-    .sort()
-    .join("|");
-  const setupKey =
-    signal.direction === "BUY" || signal.direction === "SELL"
-      ? `${setupBase}#${signal.direction}`
-      : setupBase;
-  let duplicateBlocked = false;
-
-  if (signal.direction === "BUY" || signal.direction === "SELL") {
-    const tolleranza =
-      marketSnapshot.atr30m !== null && marketSnapshot.atr30m > 0
-        ? marketSnapshot.atr30m * 0.5
-        : 0;
-    const sovrapposto = (await getOpenSignalsOtherChannels()).find(
-      (s) =>
-        s.direction === signal.direction &&
-        Math.abs(Number(s.entry) - Number(signal.entry)) <= tolleranza
-    );
-    if (sovrapposto) {
-      duplicateBlocked = true;
-      signal = {
-        ...signal,
-        direction: "NO_TRADE",
-        entry: 0,
-        stopLoss: 0,
-        tp1: 0,
-        tp2: 0,
-        riskReward: 0,
-        rejectedReason: `Setup M30 sovrapposto al canale ${sovrapposto.canale}: doppia esposizione bloccata.`,
-        reasoning: `Il setup M30 coincide con un trade ${sovrapposto.direction} gia' aperto nel canale ${sovrapposto.canale}.`,
-      };
-    }
-  }
-
-  if (
-    (signal.direction === "BUY" || signal.direction === "SELL") &&
-    (await hasTradedSetup30m(setupKey))
-  ) {
-    duplicateBlocked = true;
-    signal = {
-      ...signal,
-      direction: "NO_TRADE",
-      entry: 0,
-      stopLoss: 0,
-      tp1: 0,
-      tp2: 0,
-      riskReward: 0,
-      rejectedReason: "Setup M30 gia' tradato: duplicato bloccato.",
-      reasoning: "Setup M30 gia' tradato: attendo un nuovo evento strutturale.",
-    };
-  }
-
-  const saved = await insertSignal30m(signal, setupKey);
-
-  if ((signal.direction === "BUY" || signal.direction === "SELL") && saved.inserted) {
-    sendPushToAll({
-      title: `Nuovo setup M30: ${signal.direction}`,
-      body: `Entry ${signal.entry} · Confidence ${signal.confidence}%`,
-      url: "/",
-    }).catch((err) => console.error("[runAnalysis30m] invio push fallito:", err));
-  }
-
-  return {
-    signalId: saved.id,
-    direction: signal.direction,
-    confidence: signal.confidence,
-    xauusd: marketSnapshot.xauusd,
-    atr30m: marketSnapshot.atr30m,
-    eventiAttivi: eventiM30.length,
-    zonaRaggiunta: zonaM30Raggiunta,
-    dataSource: marketSnapshot.source,
-    rejectedReason: signal.rejectedReason ?? null,
-    duplicateBlocked: duplicateBlocked || !saved.inserted,
   };
 }
 

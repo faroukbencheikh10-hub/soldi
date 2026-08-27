@@ -6,17 +6,14 @@ import { notifyNewSignal } from "@/lib/notifications";
 const POLL_INTERVAL_MS = 60_000;
 const STORAGE_KEY = "soldi:lastSeenSignalId";
 const STORAGE_KEY_5M = "soldi:lastSeenSignalId5m";
-const STORAGE_KEY_30M = "soldi:lastSeenSignalId30m";
 
 export function SignalWatcher() {
   const lastSeenRef = useRef<string | null>(null);
   const lastSeen5mRef = useRef<string | null>(null);
-  const lastSeen30mRef = useRef<string | null>(null);
 
   useEffect(() => {
     lastSeenRef.current = window.localStorage.getItem(STORAGE_KEY);
     lastSeen5mRef.current = window.localStorage.getItem(STORAGE_KEY_5M);
-    lastSeen30mRef.current = window.localStorage.getItem(STORAGE_KEY_30M);
 
     function checkAndNotify(
       latest: { id: string; direction: string; entry: number; confidence: number } | undefined,
@@ -56,12 +53,6 @@ export function SignalWatcher() {
           lastSeen5mRef,
           STORAGE_KEY_5M,
           `Nuovo segnale veloce: ${data?.ultimoSegnale5m?.direction}`
-        );
-        checkAndNotify(
-          data?.ultimoSegnale30m,
-          lastSeen30mRef,
-          STORAGE_KEY_30M,
-          `Nuovo setup M30: ${data?.ultimoSegnale30m?.direction}`
         );
       } catch {
         // silenzioso: riprova al prossimo giro
