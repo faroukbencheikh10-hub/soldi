@@ -182,23 +182,14 @@ export async function runAnalysis(options?: { force?: boolean }) {
           resultR,
           `\n\n[Scaduto: nessun SL/TP toccato entro 4 ore. Chiuso al prezzo corrente, risultato reale ${resultR}R.]`
         );
-      } else if (!force) {
-        try {
-          const freshSnapshot = await getMarketSnapshot();
-          await insertMarketSnapshot(freshSnapshot);
-        } catch (err) {
-          console.error("[runAnalysis] snapshot di aggiornamento (trade aperto) fallito:", err);
-        }
-
-        return {
-          skipped: true,
-          reason: "signal_active",
-          activeSignalId: latest.id,
-          direction: latest.direction,
-          entry: currentPrice !== null ? entry : Number(latest.entry),
-          currentPrice: currentPrice ?? undefined,
-        };
       }
+      // Se il trade e' ancora aperto e non scaduto, NON si esce qui: il ciclo
+      // prosegue nel MONITOR piu' sotto (memoria candele, eventi tecnici,
+      // contesto, fingerprint), cosi' quando il trade si chiudera' il
+      // prossimo segnale partira' da un contesto gia' aggiornato invece che
+      // da uno fermo a quando il trade e' stato aperto. L'uscita che evita di
+      // chiamare l'AI (e quindi di perdere il tracciamento di questo trade)
+      // resta, ma spostata dopo il MONITOR: vedi piu' sotto.
     }
   }
 
@@ -434,6 +425,24 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   await setSetting("setup_fingerprint", impronta);
   // ====================== fine MONITOR ===================================
+
+  // Trade ancora aperto, non scaduto, nessuna generazione manuale in corso:
+  // il MONITOR qui sopra ha comunque girato (memoria candele, eventi, contesto,
+  // fingerprint), quindi il contesto resta aggiornato in tempo reale. Cio' che
+  // resta bloccato e' solo la parte sotto (AI + apertura di un nuovo segnale):
+  // se generassimo un nuovo segnale ora, getLatestSignal() al prossimo ciclo
+  // punterebbe a quello nuovo e il trade tuttora aperto smetterebbe di essere
+  // monitorato (nessuno controllerebbe piu' se tocca SL o TP).
+  if (hasOpenTrade && !naturalOutcome && !expired && !force) {
+    return {
+      skipped: true,
+      reason: "signal_active",
+      activeSignalId: latest.id,
+      direction: latest.direction,
+      entry: currentPrice !== null ? entry : Number(latest.entry),
+      currentPrice: currentPrice ?? undefined,
+    };
+  }
 
   const [news, calendar] = await Promise.all([
     getRelevantNews().catch(() => []),
