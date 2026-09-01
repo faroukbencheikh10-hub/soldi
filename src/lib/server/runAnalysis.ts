@@ -4,6 +4,7 @@ import {
   insertMarketSnapshot,
   insertContextSnapshot,
   getLatestSignal,
+  getSegnaliAperti,
   closeSignal,
   insertSignal5m,
   getLatestSignal5m,
@@ -365,9 +366,17 @@ async function avvisaParziale(
     (segnale.direction === "BUY" ? prezzo - entry : entry - prezzo) / rischio;
   if (guadagnoR < SOGLIA_PARZIALE_R) return false;
 
-  const gia = await getSetting("parziale_avvisato_signal_id");
-  if (gia === String(segnale.id)) return false;
-  await setSetting("parziale_avvisato_signal_id", String(segnale.id));
+  // Una chiave PER SEGNALE, non una sola condivisa.
+  //
+  // Con una chiave unica ("parziale_avvisato_signal_id") e piu' trade aperti
+  // insieme, i segnali se la sovrascrivevano a vicenda: A notificava e
+  // scriveva il proprio id, poi B lo sostituiva, poi A non si riconosceva
+  // piu' e rinotificava, all'infinito. Con una chiave per id ogni trade
+  // ricorda per conto suo di aver gia' avvisato.
+  const chiave = `parziale_avvisato_${segnale.id}`;
+  const gia = await getSetting(chiave);
+  if (gia === "true") return false;
+  await setSetting(chiave, "true");
 
   sendPushToAll({
     title: `+${guadagnoR.toFixed(1)}R · chiudi meta' e stop a pareggio`,
@@ -400,6 +409,9 @@ export async function runAnalysis(options?: { force?: boolean }) {
     !inPausa && (await getSetting("ai_refresh_al_risveglio")) === "true";
 
   const latest = await getLatestSignal();
+  // Tutti i trade ancora aperti, non solo l'ultimo: da quando la generazione
+  // non e' piu' bloccata possono essercene diversi contemporaneamente.
+  const apertiIniziali = await getSegnaliAperti();
   const hasOpenTrade =
     latest && (latest.direction === "BUY" || latest.direction === "SELL") && !latest.outcome;
 
@@ -412,78 +424,82 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   let expired = false;
 
-  if (hasOpenTrade) {
+  // ============ SORVEGLIANZA DEI TRADE APERTI ============================
+  // Da quando un trade aperto non blocca piu' la generazione (01/09) possono
+  // coesistere piu' trade aperti insieme. Vanno seguiti TUTTI: seguire solo
+  // l'ultimo lascerebbe i precedenti orfani, mai chiusi, con outcome NULL per
+  // sempre e le statistiche falsate in silenzio.
+  //
+  // Per ognuno, a ogni ciclo: si controlla se stop o target sono stati
+  // toccati (prima dalle candele, poi dal prezzo dell'istante), parte
+  // l'avviso a +1R, e si applica la scadenza. La gestione vera avviene
+  // comunque a mano sul broker: qui si misura soltanto.
+  if (apertiIniziali.length > 0) {
     currentPrice = await getCurrentPrice();
-    entry = Number(latest.entry);
-    stopLoss = Number(latest.stop_loss);
-    tp1 = Number(latest.tp1);
-    risk = Math.abs(entry - stopLoss);
 
-    // Prima fonte: le candele dall'apertura del trade in poi.
-    naturalOutcome = await esitoDalleCandele(latest.direction, latest.created_at, stopLoss, tp1);
+    for (const aperto of apertiIniziali) {
+      const eEntry = Number(aperto.entry);
+      const eStop = Number(aperto.stop_loss);
+      const eTp1 = Number(aperto.tp1);
+      const eRisk = Math.abs(eEntry - eStop);
+      if (!Number.isFinite(eEntry) || !Number.isFinite(eStop) || !Number.isFinite(eTp1)) continue;
 
-    // Ripiego sul prezzo dell'istante solo se le candele non sono disponibili.
-    if (naturalOutcome === null && currentPrice !== null) {
-      if (latest.direction === "BUY") {
-        if (currentPrice <= stopLoss) naturalOutcome = "LOSS";
-        else if (currentPrice >= tp1) naturalOutcome = "WIN";
-      } else {
-        if (currentPrice >= stopLoss) naturalOutcome = "LOSS";
-        else if (currentPrice <= tp1) naturalOutcome = "WIN";
+      // Prima fonte: le candele dall'apertura del trade in poi.
+      let esito = await esitoDalleCandele(aperto.direction, aperto.created_at, eStop, eTp1);
+
+      // Ripiego sul prezzo dell'istante solo se le candele non sono disponibili.
+      if (esito === null && currentPrice !== null) {
+        if (aperto.direction === "BUY") {
+          if (currentPrice <= eStop) esito = "LOSS";
+          else if (currentPrice >= eTp1) esito = "WIN";
+        } else {
+          if (currentPrice >= eStop) esito = "LOSS";
+          else if (currentPrice <= eTp1) esito = "WIN";
+        }
       }
-    }
 
-    if (naturalOutcome) {
-      // Una vincita vale esattamente la distanza fino a TP1, non la posizione
-      // casuale del prezzo nel momento in cui il cron se ne accorge.
-      const resultR = naturalOutcome === "WIN" && risk > 0 ? Math.abs(tp1 - entry) / risk : -1;
-      await closeSignal(latest.id, naturalOutcome, resultR);
-    } else {
-      // Il prezzo non ha ancora toccato ne' stop ne' target: e' esattamente
-      // la finestra in cui puo' arrivare sulla zona di ingresso. Il controllo
-      // gira a ogni ciclo, quindi l'avviso parte al primo passaggio utile.
-      await avvisaParziale(latest, currentPrice);
+      if (esito) {
+        // Una vincita vale esattamente la distanza fino a TP1, non la posizione
+        // casuale del prezzo nel momento in cui il cron se ne accorge.
+        const resultR = esito === "WIN" && eRisk > 0 ? Math.abs(eTp1 - eEntry) / eRisk : -1;
+        await closeSignal(aperto.id, esito, resultR);
+        if (String(aperto.id) === String(latest?.id)) naturalOutcome = esito;
+        continue;
+      }
 
-      const ageMs = Date.now() - new Date(latest.created_at).getTime();
-      expired = ageMs > SIGNAL_TIMEOUT_MS;
+      // Il prezzo non ha ancora toccato ne' stop ne' target.
+      await avvisaParziale(aperto, currentPrice);
 
-      if (expired) {
-        // Prima la scadenza registrava sempre 0, anche su un trade che era a
-        // +0,9R: i vincitori venivano tagliati e le statistiche sottostimavano
-        // la strategia. Ora si registra il risultato vero al momento della
-        // chiusura. L'esito resta BREAKEVEN perche' ne' stop ne' target sono
+      const ageMs = Date.now() - new Date(aperto.created_at).getTime();
+      const scaduto = ageMs > SIGNAL_TIMEOUT_MS;
+      if (String(aperto.id) === String(latest?.id)) {
+        entry = eEntry;
+        stopLoss = eStop;
+        tp1 = eTp1;
+        risk = eRisk;
+        expired = scaduto;
+      }
+
+      if (scaduto) {
+        // Alla scadenza si registra il risultato vero al momento della
+        // chiusura: l'esito resta BREAKEVEN perche' ne' stop ne' target sono
         // stati toccati, ma il risultato in R e' quello reale.
         const resultR =
-          currentPrice !== null && risk > 0
+          currentPrice !== null && eRisk > 0
             ? Number(
-                ((latest.direction === "BUY" ? currentPrice - entry : entry - currentPrice) / risk).toFixed(2)
+                ((aperto.direction === "BUY" ? currentPrice - eEntry : eEntry - currentPrice) / eRisk).toFixed(2)
               )
             : 0;
         await closeSignal(
-          latest.id,
+          aperto.id,
           "BREAKEVEN",
           resultR,
           `\n\n[Scaduto: nessun SL/TP toccato entro 4 ore. Chiuso al prezzo corrente, risultato reale ${resultR}R.]`
         );
-      } else if (!force) {
-        try {
-          const freshSnapshot = await getMarketSnapshot();
-          await insertMarketSnapshot(freshSnapshot);
-        } catch (err) {
-          console.error("[runAnalysis] snapshot di aggiornamento (trade aperto) fallito:", err);
-        }
-
-        return {
-          skipped: true,
-          reason: "signal_active",
-          activeSignalId: latest.id,
-          direction: latest.direction,
-          entry: currentPrice !== null ? entry : Number(latest.entry),
-          currentPrice: currentPrice ?? undefined,
-        };
       }
     }
   }
+  // ============ fine SORVEGLIANZA ========================================
 
   const marketSnapshot = await getMarketSnapshot();
 
