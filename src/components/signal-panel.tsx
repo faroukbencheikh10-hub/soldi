@@ -1,11 +1,11 @@
 import { TradeSignal } from "@/lib/types";
-import { TrendingUp, TrendingDown, CircleSlash, ShieldAlert, Target, XCircle } from "lucide-react";
+import { TrendingUp, TrendingDown, CircleSlash, ShieldAlert, XCircle } from "lucide-react";
 import { formatRecency } from "@/lib/formatTime";
 
 // L'entry di un segnale e' il bordo della zona di pullback, non un "entra
-// adesso". Questo riquadro segnala i due casi che contano: quando il prezzo
-// ha raggiunto la zona (eseguibile) e quando se n'e' allontanato troppo
-// (pullback saltato). Nel mezzo non mostra nulla.
+// adesso". Di questo riquadro resta visibile un solo caso: "Pullback
+// saltato", cioe' quando il prezzo si e' allontanato dalla zona senza
+// tornarci e inseguirlo sarebbe un errore. Negli altri casi non mostra nulla.
 const INGRESSO_SUPERATO_ATR = 1;
 
 function StatoIngresso({
@@ -30,19 +30,10 @@ function StatoIngresso({
     distanzaInAtr !== null ? ` (${distanzaInAtr.toFixed(2)} ATR)` : ""
   }`;
 
-  if (raggiunto) {
-    return (
-      <div className="mb-3 rounded-lg border border-buy/30 bg-buy/10 px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <Target size={14} className="text-buy shrink-0" />
-          <span className="text-xs font-semibold text-buy leading-none">Eseguibile ora</span>
-        </div>
-        <p className="text-[11px] text-muted mt-1.5 leading-snug">
-          Il prezzo ha raggiunto la zona di ingresso — {dettaglio}.
-        </p>
-      </div>
-    );
-  }
+  // Riquadro verde "Eseguibile ora" rimosso su richiesta: quando il prezzo
+  // ha raggiunto la zona non si mostra nulla. Resta solo l'avviso di
+  // "Pullback saltato", che segnala un caso da NON inseguire.
+  if (raggiunto) return null;
 
   if (superato) {
     return (
@@ -63,6 +54,71 @@ function StatoIngresso({
   // su richiesta: quando il prezzo non ha ancora raggiunto la zona e non se
   // n'e' allontanato troppo, non si mostra nulla.
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// FINESTRA DI CHIUSURA ATTESA
+//
+// Non e' una previsione dell'esito ne' un filtro: dice solo QUANDO,
+// statisticamente, il trade tende a chiudersi (stop o target toccato).
+//
+// I numeri vengono dai trade realmente chiusi in produzione (WIN + LOSS
+// insieme, perche' quello che si stima e' la durata, non il risultato):
+//   meta' dei trade chiude entro ~20 minuti
+//   tre quarti entro ~1 ora
+//   nove su dieci entro ~1h40
+//
+// Deliberatamente mostrata come INTERVALLO e non come orario secco: con una
+// cinquantina di trade la variabilita' e' ancora alta, e un "chiudera' alle
+// 21:38" comunicherebbe una precisione che i dati non hanno.
+//
+// Vanno riviste quando lo storico sara' piu' ampio: sono una fotografia del
+// campione attuale, non una costante del mercato.
+const CHIUSURA_MEDIANA_MIN = 20;
+const CHIUSURA_TIPICA_MAX_MIN = 61;
+const CHIUSURA_QUASI_SEMPRE_MIN = 100;
+
+function orario(dataIso: string, minutiDopo: number): string {
+  const t = new Date(new Date(dataIso).getTime() + minutiDopo * 60000);
+  if (isNaN(t.getTime())) return "—";
+  return t.toLocaleTimeString("it-IT", {
+    timeZone: "Europe/Rome",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function ChiusuraAttesa({ signal }: { signal: TradeSignal }) {
+  // Solo per trade veri e ancora aperti: a esito noto la stima non serve piu'.
+  if (signal.direction === "NO_TRADE" || signal.outcome) return null;
+  if (!signal.createdAt || isNaN(new Date(signal.createdAt).getTime())) return null;
+
+  const trascorsi = Math.floor((Date.now() - new Date(signal.createdAt).getTime()) / 60000);
+  const oltreLaNorma = trascorsi > CHIUSURA_QUASI_SEMPRE_MIN;
+
+  return (
+    <div className="mb-3 rounded-lg border border-border bg-panel2 px-3 py-2.5">
+      <div className="text-[10px] uppercase tracking-wide text-muted">Chiusura attesa</div>
+      {oltreLaNorma ? (
+        <p className="text-[11px] text-muted mt-1 leading-snug">
+          Aperto da {trascorsi} min, oltre la finestra abituale: nove trade su dieci
+          si chiudono entro {CHIUSURA_QUASI_SEMPRE_MIN} minuti.
+        </p>
+      ) : (
+        <>
+          <div className="font-mono text-sm text-text mt-0.5">
+            tra le {orario(signal.createdAt, CHIUSURA_MEDIANA_MIN)} e le{" "}
+            {orario(signal.createdAt, CHIUSURA_TIPICA_MAX_MIN)}
+          </div>
+          <p className="text-[11px] text-muted mt-1 leading-snug">
+            Meta&apos; dei trade chiude entro {CHIUSURA_MEDIANA_MIN} min, tre quarti entro
+            un&apos;ora, nove su dieci entro {CHIUSURA_QUASI_SEMPRE_MIN} min (stima sullo
+            storico, non una previsione dell&apos;esito).
+          </p>
+        </>
+      )}
+    </div>
+  );
 }
 
 function DirectionBadge({ direction }: { direction: TradeSignal["direction"] }) {
@@ -143,6 +199,7 @@ export function SignalPanel({
       </div>
 
       <StatoIngresso signal={signal} prezzoCorrente={prezzoCorrente} atr={atr} />
+      <ChiusuraAttesa signal={signal} />
 
       <div className="grid grid-cols-3 gap-2 mb-3">
         <Metric label="Entry" value={signal.entry.toFixed(2)} />
