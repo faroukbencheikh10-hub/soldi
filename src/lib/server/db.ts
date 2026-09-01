@@ -610,10 +610,17 @@ export async function salvaCandeleMemoria(
 }
 
 // Elimina le candele piu' vecchie della retention del proprio timeframe.
-// Senza argomento pulisce tutti e tre i timeframe con la propria soglia.
+// Senza argomento pulisce TUTTI i timeframe con la propria soglia.
+//
+// M15 era assente da questa lista pur essendo scritto a ogni ciclo: le sue
+// righe non venivano mai cancellate e la tabella cresceva senza limite.
+// La lista ora si ricava dalle chiavi della retention, cosi' aggiungere un
+// timeframe in futuro non puo' piu' lasciarlo fuori dalla pulizia.
 export async function pulisciCandeleMemoria(timeframe?: CandleMemoryTimeframe): Promise<void> {
   const client = getPool();
-  const timeframes: CandleMemoryTimeframe[] = timeframe ? [timeframe] : ["H1", "M30", "M5"];
+  const timeframes: CandleMemoryTimeframe[] = timeframe
+    ? [timeframe]
+    : (Object.keys(CANDLE_MEMORY_RETENTION_MS) as CandleMemoryTimeframe[]);
   for (const tf of timeframes) {
     const soglia = new Date(Date.now() - CANDLE_MEMORY_RETENTION_MS[tf]).toISOString();
     await client.query(`DELETE FROM candle_memory WHERE timeframe = $1 AND datetime < $2`, [tf, soglia]);

@@ -1,12 +1,11 @@
 import { TradeSignal } from "@/lib/types";
-import { TrendingUp, TrendingDown, CircleSlash, ShieldAlert, Hourglass, Target, XCircle } from "lucide-react";
+import { TrendingUp, TrendingDown, CircleSlash, ShieldAlert, Target, XCircle } from "lucide-react";
 import { formatRecency } from "@/lib/formatTime";
 
-// L'entry di un segnale e' il bordo della zona di pullback: un ordine
-// PENDENTE, non un "entra adesso". Questo riquadro lo dice esplicitamente e
-// mostra quanto dista dal prezzo, perche' entrare a mercato alla notifica
-// significa prendere il lato sbagliato dell'impulso e bruciare gran parte
-// dello stop prima che il trade parta.
+// L'entry di un segnale e' il bordo della zona di pullback, non un "entra
+// adesso". Questo riquadro segnala i due casi che contano: quando il prezzo
+// ha raggiunto la zona (eseguibile) e quando se n'e' allontanato troppo
+// (pullback saltato). Nel mezzo non mostra nulla.
 const INGRESSO_SUPERATO_ATR = 1;
 
 function StatoIngresso({
@@ -60,20 +59,10 @@ function StatoIngresso({
     );
   }
 
-  return (
-    <div className="mb-3 rounded-lg border border-gold/30 bg-gold/10 px-3 py-2.5">
-      <div className="flex items-center gap-2">
-        <Hourglass size={14} className="text-gold shrink-0" />
-        <span className="text-xs font-semibold text-gold leading-none">
-          Ordine pendente a {entry.toFixed(2)}
-        </span>
-      </div>
-      <p className="text-[11px] text-muted mt-1.5 leading-snug">
-        Non entrare a mercato: {dettaglio}. Piazza il limite su {entry.toFixed(2)} e aspetta
-        che il prezzo torni nella zona.
-      </p>
-    </div>
-  );
+  // Stato "in attesa" (il vecchio riquadro giallo "Ordine pendente") rimosso
+  // su richiesta: quando il prezzo non ha ancora raggiunto la zona e non se
+  // n'e' allontanato troppo, non si mostra nulla.
+  return null;
 }
 
 function DirectionBadge({ direction }: { direction: TradeSignal["direction"] }) {

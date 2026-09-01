@@ -95,6 +95,10 @@ export interface TechnicalSetupInput {
   rigetto15m: RejectionSignal;
   rigetto30m: RejectionSignal;
   liquidita24h: { massimo: number; minimo: number } | null;
+  // Valorizzato quando il prezzo e' nel cuore di un range di accumulo (vedi
+  // rilevaRangeAccumulo). Se attivo, il filtro blocca; il motivo finisce
+  // nello storico al posto della spiegazione dell'AI.
+  rangeAccumulo?: { attivo: boolean; motivo: string } | null;
 }
 
 export interface TechnicalSetupResult {
@@ -165,6 +169,20 @@ export function hasTechnicalSetup(
   }
 
   const count = segnali.length;
+
+  // Veto: prezzo nel cuore di un range di accumulo. Vince sul conteggio dei
+  // segnali -- un BOS o un displacement in mezzo a un range fra due pool di
+  // liquidita' e' quasi sempre rumore. Non scatta sui bordi del range ne'
+  // quando la rottura e' gia' in corso (vedi rilevaRangeAccumulo).
+  if (snapshot.rangeAccumulo?.attivo) {
+    return {
+      allowed: false,
+      count,
+      segnali,
+      reason: `Trade evitato: ${snapshot.rangeAccumulo.motivo}. Setup tecnico rilevato: ${count}/${sogliaSegnali}. AI non chiamata.`,
+    };
+  }
+
   const allowed = count >= sogliaSegnali;
 
   const reason = allowed

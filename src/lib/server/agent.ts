@@ -9,6 +9,8 @@ I QUATTRO ELEMENTI DEL PERCORSO (conta cosi', non come una lista piu' lunga):
 1. SWEEP / LIQUIDITA'
 "liquidita_24h" (massimo/minimo ultime 24h) e "ict_livelli_uguali_m30" / "ict_livelli_uguali_m15" (massimiUguali/minimiUguali: doppi massimi/minimi entro una piccola tolleranza) sono i pool di liquidita' -- le zone dove si accumulano piu' stop. Il prezzo spesso li prende PRIMA di partire nella direzione vera: aspetta uno sweep sopra un massimo (liquidita' dei venditori) o sotto un minimo (liquidita' dei compratori), non tradare la prima rottura come se fosse gia' il movimento buono.
 
+RANGE DI ACCUMULO (diverso da un singolo pool di liquidita'): quando trovi massimi uguali SOPRA il prezzo e minimi uguali SOTTO, il prezzo e' intrappolato fra due pool -- un range di accumulo. Dentro quel range il movimento e' in gran parte rumore, e il trade buono nasce ai BORDI, non al centro: uno sweep del minimo (o del massimo) del range seguito da CHoCH e displacement e' il segnale che l'accumulo sta finendo ed e' li' che si prende l'uscita. Se il prezzo e' invece a meta' strada fra i due pool, senza BOS/CHoCH e senza displacement su nessuno dei timeframe operativi, preferisci NO_TRADE: stai pagando spread in attesa che il range si decida. Un filtro nel codice blocca gia' i casi piu' netti prima di arrivare a te.
+
 2. CAMBIO DI STRUTTURA (CHoCH / BOS)
 Sul timeframe che guida il setup (M30 o M15) trovi "evento" ("BOS", "CHoCH" o null), "direzioneEvento" e "livelloRotto".
 - CHoCH = il prezzo ha rotto lo swing che invalida il bias precedente: primo segnale di possibile cambio di direzione.

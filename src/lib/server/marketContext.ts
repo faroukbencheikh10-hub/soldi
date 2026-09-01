@@ -67,6 +67,114 @@ const CANDELE_RECENTI = 6;
 const CANDELE_EVENTO_RECENTE = 4;
 const COMPRESSIONE_MAX_ATR = 1.2;
 
+// ---------------------------------------------------------------------------
+// RANGE DI ACCUMULO (senso ICT, non compressione di volatilita')
+//
+// Un accumulo non e' "il prezzo si muove poco": e' il prezzo intrappolato fra
+// DUE pool di liquidita' (massimi uguali sopra, minimi uguali sotto) che non
+// sono ancora stati rotti. Dentro quella fascia il movimento e' rumore: si
+// paga spread e slippage senza direzione.
+//
+// Il filtro e' deliberatamente PERMISSIVO, per non uccidere i trade buoni:
+//  - blocca SOLO il cuore del range (fra il 35% e il 65% dell'ampiezza).
+//    Sui bordi non blocca nulla, perche' lo sweep del minimo o del massimo
+//    del range E' il setup ICT buono -- e' li' che si prende l'uscita;
+//  - si disattiva da solo appena il range viene rotto: un BOS/CHoCH o un
+//    displacement significativo su QUALSIASI timeframe operativo (M30, M15
+//    o M5) tolgono immediatamente il blocco, cosi' il momento dell'uscita
+//    viene colto invece che perso.
+// ---------------------------------------------------------------------------
+
+// Fascia centrale del range considerata "morta". Piu' e' stretta, meno trade
+// vengono bloccati: 0.35-0.65 blocca circa un terzo centrale dell'ampiezza.
+const ZONA_MORTA_MIN = 0.35;
+const ZONA_MORTA_MAX = 0.65;
+
+// Ampiezza minima dell'impulso (in ATR) oltre la quale si considera che il
+// range sia in fase di rottura: il filtro si spegne.
+const ROTTURA_MIN_ATR = 1;
+
+export interface RangeAccumulo {
+  attivo: boolean;
+  motivo: string;
+  alto: number | null;
+  basso: number | null;
+  posizionePct: number | null;
+}
+
+/** Una rottura vista su un qualsiasi timeframe operativo spegne il filtro. */
+export interface RotturaTimeframe {
+  timeframe: string;
+  evento?: string | null;
+  displacementInAtr?: number | null;
+}
+
+export function rilevaRangeAccumulo(
+  prezzo: number,
+  livelliUguali: LivelliUguali | null | undefined,
+  rotture: RotturaTimeframe[] = []
+): RangeAccumulo {
+  const inattivo = (motivo: string): RangeAccumulo => ({
+    attivo: false,
+    motivo,
+    alto: null,
+    basso: null,
+    posizionePct: null,
+  });
+
+  if (!Number.isFinite(prezzo)) return inattivo("prezzo non valido");
+
+  // Il range e' gia' rotto: nessun blocco, e' esattamente il momento in cui
+  // si vuole che l'analisi giri. Vale su M30, M15 e M5 indifferentemente: il
+  // timeframe piu' veloce se ne accorge per primo ed e' quello che fa
+  // entrare in tempo invece che a movimento gia' fatto.
+  for (const r of rotture) {
+    if (r.evento === "BOS" || r.evento === "CHoCH") {
+      return inattivo(`struttura ${r.timeframe} in rottura (${r.evento}): nessun blocco`);
+    }
+    if (typeof r.displacementInAtr === "number" && r.displacementInAtr >= ROTTURA_MIN_ATR) {
+      return inattivo(
+        `displacement ${r.timeframe} ${r.displacementInAtr.toFixed(2)} ATR in corso: nessun blocco`
+      );
+    }
+  }
+
+  const sopra = (livelliUguali?.massimiUguali ?? []).filter((v) => Number.isFinite(v) && v > prezzo);
+  const sotto = (livelliUguali?.minimiUguali ?? []).filter((v) => Number.isFinite(v) && v < prezzo);
+
+  // Servono pool su ENTRAMBI i lati: e' questo che distingue un accumulo da
+  // una semplice pausa dentro un trend.
+  if (sopra.length === 0 || sotto.length === 0) {
+    return inattivo("nessun range di accumulo (manca un pool di liquidita' su almeno un lato)");
+  }
+
+  const alto = Math.min(...sopra);
+  const basso = Math.max(...sotto);
+  const ampiezza = alto - basso;
+  if (!(ampiezza > 0)) return inattivo("range degenere");
+
+  const posizione = (prezzo - basso) / ampiezza;
+  const posizionePct = Number((posizione * 100).toFixed(1));
+
+  if (posizione < ZONA_MORTA_MIN || posizione > ZONA_MORTA_MAX) {
+    return {
+      attivo: false,
+      motivo: `dentro un range ${basso.toFixed(2)}-${alto.toFixed(2)} ma vicino a un bordo (${posizionePct}%): setup di uscita possibile, nessun blocco`,
+      alto,
+      basso,
+      posizionePct,
+    };
+  }
+
+  return {
+    attivo: true,
+    motivo: `range di accumulo ${basso.toFixed(2)}-${alto.toFixed(2)} con liquidita' su entrambi i lati, prezzo al centro (${posizionePct}%) e nessuna rottura in corso: zona di rumore, si aspetta la rottura`,
+    alto,
+    basso,
+    posizionePct,
+  };
+}
+
 function num(c: Candela) {
   return { o: Number(c.open), h: Number(c.high), l: Number(c.low), c: Number(c.close), ts: c.datetime };
 }

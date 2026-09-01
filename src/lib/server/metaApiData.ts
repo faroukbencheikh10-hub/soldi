@@ -41,7 +41,21 @@ function assertConfigured() {
   }
 }
 
-async function metaApiGet(url: string, timeoutMs = 8000): Promise<unknown> {
+// Timeout per singola richiesta a MetaApi.
+//
+// Era 8 secondi, ed era troppo poco: nei log di produzione la maggior parte
+// degli errori erano AbortError, cioe' richieste interrotte da NOI mentre la
+// risposta stava arrivando -- non rifiuti di MetaApi. Con l'account deployed
+// e connesso (full redundancy) quelle erano risposte lente ma valide, buttate
+// via per impazienza, con conseguente caduta sul fallback Twelve Data.
+//
+// 15 secondi restano ampiamente dentro il tetto della funzione serverless
+// (maxDuration = 60): le sei richieste per i timeframe partono in parallelo
+// con Promise.all, quindi l'attesa peggiore complessiva e' 15 secondi, non
+// la loro somma. Il costo si paga solo quando MetaApi e' davvero irraggiungibile.
+const METAAPI_TIMEOUT_MS = 15000;
+
+async function metaApiGet(url: string, timeoutMs = METAAPI_TIMEOUT_MS): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

@@ -43,6 +43,7 @@ import {
   comprimiContesto,
   firmaContesto,
   calcolaTransizione,
+  rilevaRangeAccumulo,
   type EventoContesto,
   type ContestoCompresso,
 } from "@/lib/server/marketContext";
@@ -824,8 +825,34 @@ export async function runAnalysis(options?: { force?: boolean }) {
   // Filtro tecnico locale: se non c'e' nulla di interessante sul grafico non
   // chiamiamo l'AI (risparmio credito). La generazione manuale (force) passa
   // sempre, e il ciclo viene comunque registrato come NO_TRADE con la ragione.
+  // Range di accumulo (senso ICT): pool di liquidita' su entrambi i lati,
+  // nessuna rottura in corso, prezzo al centro. I livelli uguali di
+  // riferimento sono quelli M30; la rottura viene pero' cercata su tutti e
+  // tre i timeframe operativi, cosi' il piu' veloce sblocca subito.
+  const rangeAccumulo = rilevaRangeAccumulo(
+    marketSnapshot.xauusd,
+    marketSnapshot.ictLivelliUgualiM30,
+    [
+      {
+        timeframe: "M30",
+        evento: marketSnapshot.ictStrutturaM30?.evento ?? null,
+        displacementInAtr: marketSnapshot.rigetto30m?.ampiezzaImpulsoInAtr ?? null,
+      },
+      {
+        timeframe: "M15",
+        evento: marketSnapshot.ictStrutturaM15?.evento ?? null,
+        displacementInAtr: marketSnapshot.rigetto15m?.ampiezzaImpulsoInAtr ?? null,
+      },
+      {
+        timeframe: "M5",
+        evento: marketSnapshot.ictStrutturaM5?.evento ?? null,
+        displacementInAtr: marketSnapshot.rigetto5m?.ampiezzaImpulsoInAtr ?? null,
+      },
+    ]
+  );
+
   const setupTecnico = hasTechnicalSetup(
-    marketSnapshot,
+    { ...marketSnapshot, rangeAccumulo },
     marketSnapshot.xauusd,
     SOGLIA_SETUP_ORO,
     eventiAttivi
