@@ -19,6 +19,10 @@ import {
   metaApiFetchTimeSeries,
   isMetaApiPriceStale,
 } from "@/lib/server/metaApiData";
+import {
+  getMarketCalendarContext,
+  type MarketCalendarContext,
+} from "@/lib/server/marketCalendar";
 
 const TD_BASE = "https://api.twelvedata.com";
 
@@ -106,14 +110,27 @@ function computeLiquidity24h(candles1h: Candle[] | undefined): { massimo: number
   return { massimo: Number(Math.max(...massimi).toFixed(2)), minimo: Number(Math.min(...minimi).toFixed(2)) };
 }
 
-export function computeSessionInfo(date: Date = new Date()): SessionInfo {
+/**
+ * Sessione corrente e minuti dall'apertura.
+ *
+ * La finestra oraria resta quella di sempre (Londra 08:00-16:30, New York
+ * 09:30-16:00), ma una sessione conta solo se quel mercato risulta realmente
+ * OPEN in quel momento. Cosi' un lunedi' festivo non risulta piu' "londra".
+ * Nient'altro cambia: il fallback resta "asia" come prima.
+ */
+export function computeSessionInfo(
+  date: Date = new Date(),
+  calendario: MarketCalendarContext = getMarketCalendarContext(date)
+): SessionInfo {
   const london = minutesSinceMidnight(date, "Europe/London");
   const ny = minutesSinceMidnight(date, "America/New_York");
 
   const londonOpen =
+    calendario.london.today.status === "open" &&
     london !== null && london.day >= 1 && london.day <= 5 &&
     london.minutes >= LONDON_OPEN_MIN && london.minutes < LONDON_CLOSE_MIN;
   const nyOpen =
+    calendario.new_york.today.status === "open" &&
     ny !== null && ny.day >= 1 && ny.day <= 5 &&
     ny.minutes >= NY_OPEN_MIN && ny.minutes < NY_CLOSE_MIN;
 
@@ -213,7 +230,7 @@ function normalizzaCandeleTwelveData(grezze: unknown, etichetta: string): Candle
   return scartaCandeleNelFuturo(out, `${etichetta} (twelvedata)`);
 }
 
-interface MarketSnapshot {
+export interface MarketSnapshot {
   xauusd: number;
   xauusdChangePct: number;
   xauusdQuotedAt: number | null;
@@ -231,7 +248,10 @@ interface MarketSnapshot {
   levels5m: Levels5m;
   levels30m: Levels30m;
   session: SessionInfo;
+  /** Stato odierno dei quattro mercati (aperto/chiuso + festivita'). Contesto, non filtro. */
+  marketCalendar: MarketCalendarContext;
   rigetto5m: RejectionSignal;
+  rigetto15m: RejectionSignal;
   rigetto30m: RejectionSignal;
   liquidita24h: { massimo: number; minimo: number } | null;
   dxySource: string;
@@ -246,10 +266,14 @@ interface MarketSnapshot {
   ictFvgH1: FVG[];
   ictLivelliUgualiH1: LivelliUguali;
   ictStrutturaM30: StructureResult;
+  ictStrutturaM15: StructureResult;
   ictStrutturaM5: StructureResult;
   ictOrderBlocksM30: OrderBlock[];
   ictFvgM30: FVG[];
   ictLivelliUgualiM30: LivelliUguali;
+  ictOrderBlocksM15: OrderBlock[];
+  ictFvgM15: FVG[];
+  ictLivelliUgualiM15: LivelliUguali;
   ictOrderBlocksM5: OrderBlock[];
   ictFvgM5: FVG[];
 }
@@ -293,6 +317,11 @@ async function tryTwelveData(): Promise<MarketSnapshot | null> {
   const xau = await tdFetchQuote("XAU/USD");
   if (!xau) return null;
 
+  // Calcolato una volta sola: sessione e contesto calendario devono descrivere
+  // lo stesso istante. Funzione pura, nessuna chiamata di rete.
+  const adesso = new Date();
+  const calendarioMercati = getMarketCalendarContext(adesso);
+
   const [c5, c15, c30, c1h, c4h, c1d, macro] = await Promise.all([
     tdFetchTimeSeries("XAU/USD", "5min", 40),
     tdFetchTimeSeries("XAU/USD", "15min", 40),
@@ -334,8 +363,10 @@ async function tryTwelveData(): Promise<MarketSnapshot | null> {
     levels: computeLevels(c15, xau.close, atr15),
     levels5m: computeLevels5m(c5, xau.close, atr5),
     levels30m: computeLevels30m(c30 ?? undefined, xau.close, atr30),
-    session: computeSessionInfo(),
+    session: computeSessionInfo(adesso, calendarioMercati),
+    marketCalendar: calendarioMercati,
     rigetto5m: computeRejection(c5, atr5),
+    rigetto15m: computeRejection(c15, atr15),
     rigetto30m: computeRejection(c30 ?? undefined, atr30),
     liquidita24h: computeLiquidity24h(c1h ?? undefined),
     dxySource: macro.dxy.source,
@@ -350,10 +381,14 @@ async function tryTwelveData(): Promise<MarketSnapshot | null> {
     ictFvgH1: computeFVG(c1h),
     ictLivelliUgualiH1: computeEqualLevels(c1h, atr1h),
     ictStrutturaM30: computeStructure(c30 ?? []),
+    ictStrutturaM15: computeStructure(c15),
     ictStrutturaM5: computeStructure(c5),
     ictOrderBlocksM30: computeOrderBlocks(c30 ?? []),
     ictFvgM30: computeFVG(c30 ?? []),
     ictLivelliUgualiM30: computeEqualLevels(c30 ?? [], atr30),
+    ictOrderBlocksM15: computeOrderBlocks(c15),
+    ictFvgM15: computeFVG(c15),
+    ictLivelliUgualiM15: computeEqualLevels(c15, atr15),
     ictOrderBlocksM5: computeOrderBlocks(c5),
     ictFvgM5: computeFVG(c5),
   };
@@ -366,6 +401,11 @@ async function tryMetaApi(): Promise<MarketSnapshot | null> {
     console.error("[marketData] prezzo MetaApi stale, passo al fallback Twelve Data");
     return null;
   }
+
+  // Calcolato una volta sola: sessione e contesto calendario devono descrivere
+  // lo stesso istante. Funzione pura, nessuna chiamata di rete.
+  const adesso = new Date();
+  const calendarioMercati = getMarketCalendarContext(adesso);
 
   const [c5Raw, c15Raw, c30Raw, c1hRaw, c4hRaw, c1dRaw, macro] = await Promise.all([
     metaApiFetchTimeSeries("5min", 40),
@@ -425,8 +465,10 @@ async function tryMetaApi(): Promise<MarketSnapshot | null> {
     levels: computeLevels(c15, xau.close, atr15),
     levels5m: computeLevels5m(c5, xau.close, atr5),
     levels30m: computeLevels30m(c30 ?? undefined, xau.close, atr30),
-    session: computeSessionInfo(),
+    session: computeSessionInfo(adesso, calendarioMercati),
+    marketCalendar: calendarioMercati,
     rigetto5m: computeRejection(c5, atr5),
+    rigetto15m: computeRejection(c15, atr15),
     rigetto30m: computeRejection(c30 ?? undefined, atr30),
     liquidita24h: computeLiquidity24h(c1h ?? undefined),
     dxySource: macro.dxy.source,
@@ -441,10 +483,14 @@ async function tryMetaApi(): Promise<MarketSnapshot | null> {
     ictFvgH1: computeFVG(c1h),
     ictLivelliUgualiH1: computeEqualLevels(c1h, atr1h),
     ictStrutturaM30: computeStructure(c30 ?? []),
+    ictStrutturaM15: computeStructure(c15),
     ictStrutturaM5: computeStructure(c5),
     ictOrderBlocksM30: computeOrderBlocks(c30 ?? []),
     ictFvgM30: computeFVG(c30 ?? []),
     ictLivelliUgualiM30: computeEqualLevels(c30 ?? [], atr30),
+    ictOrderBlocksM15: computeOrderBlocks(c15),
+    ictFvgM15: computeFVG(c15),
+    ictLivelliUgualiM15: computeEqualLevels(c15, atr15),
     ictOrderBlocksM5: computeOrderBlocks(c5),
     ictFvgM5: computeFVG(c5),
   };

@@ -19,11 +19,11 @@ import {
   salvaCandeleMemoria,
   pulisciCandeleMemoria,
 } from "@/lib/server/db";
-import { getMarketSnapshot, getCurrentPrice, isMarketOpen } from "@/lib/server/marketData";
+import { getMarketSnapshot, getCurrentPrice, isMarketOpen, type MarketSnapshot } from "@/lib/server/marketData";
 import { metaApiFetchTimeSeries } from "@/lib/server/metaApiData";
 import { getRelevantNews } from "@/lib/server/news";
 import { getEconomicCalendar } from "@/lib/server/calendar";
-import { generateSignal, generateSignal5m } from "@/lib/server/agent";
+import { generateSignal, generateSignal5m, generaScenarioNotizia } from "@/lib/server/agent";
 import { validateSignal } from "@/lib/server/validateSignal";
 import { sendPushToAll } from "@/lib/server/pushSend";
 import { shouldCallAI, hasTechnicalSetup } from "@/lib/server/aiGate";
@@ -48,6 +48,80 @@ import {
 } from "@/lib/server/marketContext";
 
 const SIGNAL_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// DISTANZA DELL'INGRESSO DAL PREZZO
+//
+// Il numero "entry" prodotto dalla strategia e' il bordo della zona di
+// pullback (Order Block / FVG): e' un ORDINE PENDENTE, e quasi mai coincide
+// con il prezzo dell'istante in cui parte la notifica. Entrare a mercato
+// appena arriva la notifica significa prendere il lato sbagliato
+// dell'impulso: si consuma gran parte dello stop prima che il trade vada
+// dove deve, e il rapporto rischio/rendimento reale crolla rispetto a quello
+// calcolato sull'entry.
+//
+// Qui non si cambia nessuna decisione: si misura soltanto quanto dista
+// l'entry dal prezzo e se l'ordine e' ancora da raggiungere, gia' valido, o
+// ormai superato. Serve a scriverlo nella notifica e in dashboard.
+// ---------------------------------------------------------------------------
+
+export type StatoIngresso = "eseguibile" | "in_attesa" | "superato";
+
+export interface DistanzaIngresso {
+  stato: StatoIngresso;
+  distanza: number;
+  distanzaInAtr: number | null;
+  testo: string;
+}
+
+// Oltre questa distanza (in ATR) il pullback non e' piu' ragionevolmente
+// raggiungibile: il prezzo se n'e' andato senza tornare indietro.
+const INGRESSO_SUPERATO_ATR = 1;
+
+export function distanzaIngresso(
+  direzione: "BUY" | "SELL",
+  entry: number,
+  prezzo: number | null,
+  atr: number | null
+): DistanzaIngresso {
+  if (prezzo === null || !Number.isFinite(prezzo) || !Number.isFinite(entry)) {
+    return { stato: "in_attesa", distanza: 0, distanzaInAtr: null, testo: `Entry ${entry.toFixed(2)}` };
+  }
+
+  const distanza = Number(Math.abs(entry - prezzo).toFixed(2));
+  const distanzaInAtr = atr !== null && atr > 0 ? Number((distanza / atr).toFixed(2)) : null;
+
+  // Il limite e' gia' buono quando il prezzo lo ha raggiunto o superato dal
+  // lato favorevole: sotto l'entry per un BUY, sopra per un SELL.
+  const raggiunto = direzione === "BUY" ? prezzo <= entry : prezzo >= entry;
+  if (raggiunto) {
+    return {
+      stato: "eseguibile",
+      distanza,
+      distanzaInAtr,
+      testo: `Entry ${entry.toFixed(2)} · eseguibile ora (prezzo ${prezzo.toFixed(2)})`,
+    };
+  }
+
+  const troppoLontano = distanzaInAtr !== null && distanzaInAtr > INGRESSO_SUPERATO_ATR;
+  if (troppoLontano) {
+    return {
+      stato: "superato",
+      distanza,
+      distanzaInAtr,
+      testo: `Entry ${entry.toFixed(2)} · prezzo gia' a ${prezzo.toFixed(2)}, ${distanza} oltre (${distanzaInAtr} ATR) — pullback probabilmente saltato`,
+    };
+  }
+
+  return {
+    stato: "in_attesa",
+    distanza,
+    distanzaInAtr,
+    testo: `Entry ${entry.toFixed(2)} · PENDENTE, prezzo ${prezzo.toFixed(2)} (${distanza}${
+      distanzaInAtr !== null ? ` · ${distanzaInAtr} ATR` : ""
+    }) — non entrare a mercato`,
+  };
+}
 
 // Forma minima di una candela grezza cosi' come arriva da marketData.ts
 // (stringhe numeriche, indice 0 = candela in formazione). Serve solo qui,
@@ -108,6 +182,204 @@ async function esitoDalleCandele(
   return null;
 }
 
+// AVVISO NOTIZIA CON LIVELLI PRONTI
+//
+// Perche' un avviso e non un segnale: il percorso cron -> OpenAI -> push ->
+// telefono -> esecuzione manuale costa minuti, e il primo impulso su un dato
+// macro dura secondi. Un segnale generato alle 16:00 arriva quando il
+// movimento e' finito, e allo spread allargato del momento si compra il
+// massimo pagando il pedaggio.
+//
+// L'unico modo di prendere il primo movimento e' avere gli ordini GIA' sul
+// book. Percio' l'avviso parte in anticipo (T-15/T-5) e porta con se' i due
+// livelli: sopra l'estremo dell'ultima ora piu' un cuscinetto, sotto lo
+// stesso al contrario. Si piazzano buy stop e sell stop e si aspetta il dato.
+//
+// Parte una volta sola per evento.
+const ANTICIPO_MAX_MIN = 15;
+const ANTICIPO_MIN_MIN = 4;
+// Cuscinetto oltre l'estremo, in ATR del 15 minuti: serve a non farsi
+// innescare dal semplice allargamento dello spread al momento dell'uscita.
+const CUSCINETTO_ATR = 0.35;
+// Candele da 5 minuti che compongono il range di riferimento (ultima ora).
+const CANDELE_RANGE = 12;
+
+// Finestra in cui lo scenario viene preparato: abbastanza presto da essere
+// pronto quando parte l'avviso, abbastanza tardi da vedere il contesto vero.
+const SCENARIO_DA_MIN = 60;
+const SCENARIO_A_MIN = 12;
+// Uno scenario resta valido per tutta la vita dell'evento piu' un'ora dopo:
+// serve anche DOPO l'uscita, per capire quale ramo si e' verificato.
+const SCENARIO_VALIDO_DOPO_MIN = 60;
+
+interface ScenarioSalvato {
+  chiave: string;
+  eventoTs: string;
+  mappa: unknown;
+}
+
+// Prepara la mappa di reazione una volta sola per evento e la salva. Una
+// chiamata OpenAI in piu' per ogni dato importante, non per ogni ciclo.
+async function preparaScenario(
+  calendar: { title: string; country: string; impact: string; time: string }[],
+  snapshot: MarketSnapshot,
+  news: unknown,
+  adesso: number
+): Promise<void> {
+  if (!Array.isArray(calendar)) return;
+
+  const prossimo = calendar
+    .map((e) => ({ e, ts: new Date(e.time).getTime() }))
+    .filter(({ e, ts }) => {
+      if (!Number.isFinite(ts) || e.impact !== "high") return false;
+      const minuti = (ts - adesso) / 60000;
+      return minuti <= SCENARIO_DA_MIN && minuti >= SCENARIO_A_MIN;
+    })
+    .sort((a, b) => a.ts - b.ts)[0];
+  if (!prossimo) return;
+
+  const chiave = `${prossimo.e.title}|${prossimo.e.time}`;
+  const salvato = await getSetting("scenario_notizia");
+  if (salvato) {
+    try {
+      if ((JSON.parse(salvato) as ScenarioSalvato).chiave === chiave) return;
+    } catch {
+      // valore corrotto: si rigenera
+    }
+  }
+
+  try {
+    const mappa = await generaScenarioNotizia({ evento: prossimo.e, marketSnapshot: snapshot, news });
+    const record: ScenarioSalvato = {
+      chiave,
+      eventoTs: new Date(prossimo.ts).toISOString(),
+      mappa,
+    };
+    await setSetting("scenario_notizia", JSON.stringify(record));
+  } catch (err) {
+    // Uno scenario mancante non deve fermare il ciclo: l'analisi prosegue
+    // senza, esattamente come faceva prima.
+    console.error("[runAnalysis] scenario notizia fallito:", err);
+  }
+}
+
+// Recupera lo scenario se ancora pertinente, per infilarlo nel payload AI.
+async function scenarioCorrente(adesso: number): Promise<unknown> {
+  const salvato = await getSetting("scenario_notizia");
+  if (!salvato) return null;
+  try {
+    const record = JSON.parse(salvato) as ScenarioSalvato;
+    const ts = new Date(record.eventoTs).getTime();
+    if (!Number.isFinite(ts)) return null;
+    if (adesso > ts + SCENARIO_VALIDO_DOPO_MIN * 60 * 1000) return null;
+    return record.mappa;
+  } catch {
+    return null;
+  }
+}
+
+async function avvisaNotizia(
+  calendar: { title: string; country: string; impact: string; time: string }[],
+  snapshot: MarketSnapshot,
+  adesso: number
+): Promise<boolean> {
+  if (!Array.isArray(calendar) || calendar.length === 0) return false;
+
+  const imminente = calendar
+    .map((e) => ({ e, ts: new Date(e.time).getTime() }))
+    .filter(({ e, ts }) => {
+      if (!Number.isFinite(ts)) return false;
+      if (e.impact !== "high" && e.impact !== "medium") return false;
+      const minuti = (ts - adesso) / 60000;
+      return minuti <= ANTICIPO_MAX_MIN && minuti >= ANTICIPO_MIN_MIN;
+    })
+    .sort((a, b) => a.ts - b.ts)[0];
+  if (!imminente) return false;
+
+  const chiave = `${imminente.e.title}|${imminente.e.time}`;
+  const gia = await getSetting("notizia_avvisata");
+  if (gia === chiave) return false;
+  await setSetting("notizia_avvisata", chiave);
+
+  const minuti = Math.round((imminente.ts - adesso) / 60000);
+  const atr = snapshot.atr15m ?? null;
+  const prezzo = snapshot.xauusd;
+
+  // Range dell'ultima ora dalle candele da 5 minuti gia' chiuse.
+  const c5 = Array.isArray(snapshot.candles?.["5m"]) ? snapshot.candles["5m"] : [];
+  const finestra = c5.slice(1, 1 + CANDELE_RANGE);
+  const massimi = finestra.map((c) => Number(c.high)).filter(Number.isFinite);
+  const minimi = finestra.map((c) => Number(c.low)).filter(Number.isFinite);
+
+  let livelli = "";
+  if (massimi.length >= 3 && minimi.length >= 3 && atr !== null && atr > 0) {
+    const cuscinetto = atr * CUSCINETTO_ATR;
+    const sopra = Math.max(...massimi) + cuscinetto;
+    const sotto = Math.min(...minimi) - cuscinetto;
+    livelli = ` Buy stop ${sopra.toFixed(2)} · Sell stop ${sotto.toFixed(2)} (range ultima ora + ${cuscinetto.toFixed(2)}).`;
+  }
+
+  sendPushToAll({
+    title: `Fra ${minuti} min: ${imminente.e.title}`,
+    body: `${imminente.e.country}, impatto ${imminente.e.impact}. Prezzo ${
+      prezzo !== null ? prezzo.toFixed(2) : "n/d"
+    }.${livelli} Piazza gli ordini ORA: dopo l'uscita e' tardi.`,
+    url: "/",
+    tag: "notizia-imminente",
+  }).catch((err) => console.error("[runAnalysis] avviso notizia fallito:", err));
+
+  return true;
+}
+
+// Avviso di GESTIONE a +1R.
+//
+// Sui dati reali il TP1 arriva in media dopo 1h40, ma con una coda lunga: dei
+// venti trade che l'hanno raggiunto, otto entro un'ora, tredici entro due,
+// venti entro quattro. Chiudere a mano dopo un'ora taglia piu' della meta'
+// dei vincitori -- ed e' esattamente quello che succedeva, perche' l'attesa
+// avveniva a rischio pieno.
+//
+// Portare lo stop a pareggio dopo un parziale rende l'attesa gratuita: da li'
+// in poi il trade non puo' piu' perdere, e le ore successive non costano
+// niente. L'esecuzione e' manuale (l'app non manda ordini al broker): questo
+// e' solo l'avviso che il livello e' stato raggiunto.
+//
+// Parte una volta sola per segnale. Non serve nessuna guardia sull'ingresso:
+// arrivare a +1R implica che il prezzo ha gia' superato l'entry.
+const SOGLIA_PARZIALE_R = 1;
+
+async function avvisaParziale(
+  segnale: { id: string | number; direction: string; entry: unknown; stop_loss: unknown; tp1: unknown },
+  prezzo: number | null
+): Promise<boolean> {
+  if (prezzo === null || !Number.isFinite(prezzo)) return false;
+  if (segnale.direction !== "BUY" && segnale.direction !== "SELL") return false;
+
+  const entry = Number(segnale.entry);
+  const stopLoss = Number(segnale.stop_loss);
+  const rischio = Math.abs(entry - stopLoss);
+  if (!Number.isFinite(entry) || !Number.isFinite(stopLoss) || rischio <= 0) return false;
+
+  const guadagnoR =
+    (segnale.direction === "BUY" ? prezzo - entry : entry - prezzo) / rischio;
+  if (guadagnoR < SOGLIA_PARZIALE_R) return false;
+
+  const gia = await getSetting("parziale_avvisato_signal_id");
+  if (gia === String(segnale.id)) return false;
+  await setSetting("parziale_avvisato_signal_id", String(segnale.id));
+
+  sendPushToAll({
+    title: `+${guadagnoR.toFixed(1)}R · chiudi meta' e stop a pareggio`,
+    body: `${segnale.direction} da ${entry.toFixed(2)}, prezzo ${prezzo.toFixed(2)}. Sposta lo stop a ${entry.toFixed(
+      2
+    )}: da qui in poi il trade non puo' piu' perdere. TP1 ${Number(segnale.tp1).toFixed(2)}.`,
+    url: "/",
+    tag: "parziale-1r",
+  }).catch((err) => console.error("[runAnalysis] avviso parziale fallito:", err));
+
+  return true;
+}
+
 export async function runAnalysis(options?: { force?: boolean }) {
   const force = options?.force ?? false;
 
@@ -117,9 +389,14 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   await ensureSchema();
 
-  if (await isAiPaused()) {
-    return { skipped: true, reason: "ai_paused" };
-  }
+  // MODALITA' SONNO — la pausa NON ferma il monitor.
+  // Il monitor (candele chiuse, eventi di struttura, contesto, snapshot)
+  // continua a girare anche in pausa: e' cosi' che al risveglio l'AI ritrova
+  // la memoria completa invece di un buco. Il blocco vero e' piu' in basso,
+  // subito prima della chiamata a pagamento.
+  const inPausa = await isAiPaused();
+  const daRisvegliare =
+    !inPausa && (await getSetting("ai_refresh_al_risveglio")) === "true";
 
   const latest = await getLatestSignal();
   const hasOpenTrade =
@@ -161,6 +438,11 @@ export async function runAnalysis(options?: { force?: boolean }) {
       const resultR = naturalOutcome === "WIN" && risk > 0 ? Math.abs(tp1 - entry) / risk : -1;
       await closeSignal(latest.id, naturalOutcome, resultR);
     } else {
+      // Il prezzo non ha ancora toccato ne' stop ne' target: e' esattamente
+      // la finestra in cui puo' arrivare sulla zona di ingresso. Il controllo
+      // gira a ogni ciclo, quindi l'avviso parte al primo passaggio utile.
+      await avvisaParziale(latest, currentPrice);
+
       const ageMs = Date.now() - new Date(latest.created_at).getTime();
       expired = ageMs > SIGNAL_TIMEOUT_MS;
 
@@ -182,21 +464,30 @@ export async function runAnalysis(options?: { force?: boolean }) {
           resultR,
           `\n\n[Scaduto: nessun SL/TP toccato entro 4 ore. Chiuso al prezzo corrente, risultato reale ${resultR}R.]`
         );
+      } else if (!force) {
+        try {
+          const freshSnapshot = await getMarketSnapshot();
+          await insertMarketSnapshot(freshSnapshot);
+        } catch (err) {
+          console.error("[runAnalysis] snapshot di aggiornamento (trade aperto) fallito:", err);
+        }
+
+        return {
+          skipped: true,
+          reason: "signal_active",
+          activeSignalId: latest.id,
+          direction: latest.direction,
+          entry: currentPrice !== null ? entry : Number(latest.entry),
+          currentPrice: currentPrice ?? undefined,
+        };
       }
-      // Se il trade e' ancora aperto e non scaduto, NON si esce qui: il ciclo
-      // prosegue nel MONITOR piu' sotto (memoria candele, eventi tecnici,
-      // contesto, fingerprint), cosi' quando il trade si chiudera' il
-      // prossimo segnale partira' da un contesto gia' aggiornato invece che
-      // da uno fermo a quando il trade e' stato aperto. L'uscita che evita di
-      // chiamare l'AI (e quindi di perdere il tracciamento di questo trade)
-      // resta, ma spostata dopo il MONITOR: vedi piu' sotto.
     }
   }
 
   const marketSnapshot = await getMarketSnapshot();
 
   // ================ MEMORIA CANDELE (solo infrastruttura) =================
-  // Persistenza pura delle candele CHIUSE H1/M30/M5 su Neon (tabella
+  // Persistenza pura delle candele CHIUSE M30/M15/M5 su Neon (tabella
   // candle_memory, separata da market_snapshots.raw). Non legge questa
   // memoria nessuna parte della strategia o del payload AI: e' solo
   // l'infrastruttura per renderle rileggibili in futuro. Un fallimento qui
@@ -221,12 +512,12 @@ export async function runAnalysis(options?: { force?: boolean }) {
             Number.isFinite(new Date(c.datetime).getTime())
         );
 
-    await salvaCandeleMemoria("H1", soleChiuse(marketSnapshot.candles["1h"]));
     await salvaCandeleMemoria("M30", soleChiuse(marketSnapshot.candles["30m"]));
+    await salvaCandeleMemoria("M15", soleChiuse(marketSnapshot.candles["15m"]));
     await salvaCandeleMemoria("M5", soleChiuse(marketSnapshot.candles["5m"]));
     await pulisciCandeleMemoria();
   } catch (err) {
-    console.error("[runAnalysis] memoria candele H1/M30/M5 fallita:", err);
+    console.error("[runAnalysis] memoria candele M30/M15/M5 fallita:", err);
   }
   // ================ fine MEMORIA CANDELE ====================================
 
@@ -253,8 +544,8 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   // 1) nuovi eventi sulle candele CHIUSE, registrati una volta sola
   const eventiRilevati = [
-    ...rilevaEventi(marketSnapshot.candles["1h"], marketSnapshot.atr1h, "H1"),
     ...rilevaEventi(marketSnapshot.candles["30m"], marketSnapshot.atr30m, "M30"),
+    ...rilevaEventi(marketSnapshot.candles["15m"], marketSnapshot.atr15m, "M15"),
     ...rilevaEventi(marketSnapshot.candles["5m"], marketSnapshot.atr5m, "M5"),
   ];
   await inserisciEventiSetup(eventiRilevati);
@@ -274,12 +565,17 @@ export async function runAnalysis(options?: { force?: boolean }) {
       candelaTs: new Date(riga.candela_ts).toISOString(),
       rilevatoIl: new Date(riga.rilevato_il).toISOString(),
     };
+    // "H1" non viene piu' generato, ma in tabella possono esserci righe H1
+    // ancora ACTIVE dai cicli precedenti: vanno lette sulle candele orarie
+    // finche' non si invalidano o scadono da sole.
     const candele =
       evento.timeframe === "H1"
         ? marketSnapshot.candles["1h"]
         : evento.timeframe === "M30"
           ? marketSnapshot.candles["30m"]
-          : marketSnapshot.candles["5m"];
+          : evento.timeframe === "M15"
+            ? marketSnapshot.candles["15m"]
+            : marketSnapshot.candles["5m"];
 
     const motivo = motivoInvalidazione(evento, candele);
     if (motivo) {
@@ -310,14 +606,14 @@ export async function runAnalysis(options?: { force?: boolean }) {
     {
       prezzo: marketSnapshot.xauusd,
       candles: marketSnapshot.candles,
-      atr1h: marketSnapshot.atr1h,
       atr30m: marketSnapshot.atr30m,
+      atr15m: marketSnapshot.atr15m,
       atr5m: marketSnapshot.atr5m,
       liquidita24h: marketSnapshot.liquidita24h,
-      zoneH1: {
-        orderBlocks: marketSnapshot.ictOrderBlocksH1,
-        fvg: marketSnapshot.ictFvgH1,
-        livelliUguali: marketSnapshot.ictLivelliUgualiH1,
+      zoneM15: {
+        orderBlocks: marketSnapshot.ictOrderBlocksM15,
+        fvg: marketSnapshot.ictFvgM15,
+        livelliUguali: marketSnapshot.ictLivelliUgualiM15,
       },
       zoneM30: {
         orderBlocks: marketSnapshot.ictOrderBlocksM30,
@@ -354,8 +650,8 @@ export async function runAnalysis(options?: { force?: boolean }) {
   await setSetting(
     "contesto_sintesi",
     JSON.stringify({
-      h1: { regime: contesto.h1.regime, fase: contesto.h1.fase },
       m30: { regime: contesto.m30.regime, fase: contesto.m30.fase },
+      m15: { regime: contesto.m15.regime, fase: contesto.m15.fase },
       m5: { regime: contesto.m5.regime, fase: contesto.m5.fase },
       prezzo: contesto.prezzo,
       aggiornatoIl: contesto.aggiornatoIl,
@@ -365,9 +661,9 @@ export async function runAnalysis(options?: { force?: boolean }) {
   // 6) impronta del setup
   // Le zone vengono etichettate con timeframe/tipo/direzione PRIMA del
   // controllo "il prezzo e' dentro?": la fingerprint deve poter distinguere
-  // "dentro l'Order Block M30 ribassista 2375-2371" da "dentro la FVG H1
+  // "dentro l'Order Block M30 ribassista 2375-2371" da "dentro la FVG M15
   // rialzista 2360-2358", non solo sapere che e' "dentro una zona qualsiasi".
-  // Copre H1, M30 e M5 (prima mancava M30).
+  // Copre M30, M15 e M5.
   const tagZone = (
     timeframe: Timeframe,
     tipo: "orderBlock" | "fvg",
@@ -382,8 +678,8 @@ export async function runAnalysis(options?: { force?: boolean }) {
     }));
 
   const zoneOccupate = zoneOccupateDalPrezzo(marketSnapshot.xauusd, [
-    tagZone("H1", "orderBlock", marketSnapshot.ictOrderBlocksH1),
-    tagZone("H1", "fvg", marketSnapshot.ictFvgH1),
+    tagZone("M15", "orderBlock", marketSnapshot.ictOrderBlocksM15),
+    tagZone("M15", "fvg", marketSnapshot.ictFvgM15),
     tagZone("M30", "orderBlock", marketSnapshot.ictOrderBlocksM30),
     tagZone("M30", "fvg", marketSnapshot.ictFvgM30),
     tagZone("M5", "orderBlock", marketSnapshot.ictOrderBlocksM5),
@@ -407,15 +703,18 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   // 8) setup invariato: il ciclo finisce qui. Niente riga nello storico,
   //    niente AI, si riusa l'analisi precedente.
-  if (!force && !improntaCambiata && chiusiOra.length === 0) {
+  // Al risveglio si forza sempre un giro completo: durante la pausa la
+  // fingerprint ha continuato ad aggiornarsi, quindi senza questa eccezione
+  // il ciclo direbbe "setup invariato" e non chiamerebbe mai l'AI.
+  if (!force && !daRisvegliare && !improntaCambiata && chiusiOra.length === 0) {
     return {
       skipped: true,
       reason: "setup_invariato",
       eventiAttivi: eventiAttivi.length,
       zoneOccupate: zoneOccupate.length,
       contesto: {
-        h1: { regime: contesto.h1.regime, fase: contesto.h1.fase },
         m30: { regime: contesto.m30.regime, fase: contesto.m30.fase },
+        m15: { regime: contesto.m15.regime, fase: contesto.m15.fase },
         m5: { regime: contesto.m5.regime, fase: contesto.m5.fase },
       },
       segnaleRiusato: await getSetting("setup_last_signal_id"),
@@ -426,22 +725,28 @@ export async function runAnalysis(options?: { force?: boolean }) {
   await setSetting("setup_fingerprint", impronta);
   // ====================== fine MONITOR ===================================
 
-  // Trade ancora aperto, non scaduto, nessuna generazione manuale in corso:
-  // il MONITOR qui sopra ha comunque girato (memoria candele, eventi, contesto,
-  // fingerprint), quindi il contesto resta aggiornato in tempo reale. Cio' che
-  // resta bloccato e' solo la parte sotto (AI + apertura di un nuovo segnale):
-  // se generassimo un nuovo segnale ora, getLatestSignal() al prossimo ciclo
-  // punterebbe a quello nuovo e il trade tuttora aperto smetterebbe di essere
-  // monitorato (nessuno controllerebbe piu' se tocca SL o TP).
-  if (hasOpenTrade && !naturalOutcome && !expired && !force) {
+  // Da qui in poi si spendono soldi: news, calendario e chiamata AI.
+  // In pausa il ciclo si ferma esattamente qui, con il monitor gia' aggiornato.
+  if (inPausa) {
     return {
       skipped: true,
-      reason: "signal_active",
-      activeSignalId: latest.id,
-      direction: latest.direction,
-      entry: currentPrice !== null ? entry : Number(latest.entry),
-      currentPrice: currentPrice ?? undefined,
+      reason: "ai_paused",
+      monitorAggiornato: true,
+      eventiAttivi: eventiAttivi.length,
+      zoneOccupate: zoneOccupate.length,
+      contesto: {
+        m30: { regime: contesto.m30.regime, fase: contesto.m30.fase },
+        m15: { regime: contesto.m15.regime, fase: contesto.m15.fase },
+        m5: { regime: contesto.m5.regime, fase: contesto.m5.fase },
+      },
+      inPausaDal: await getSetting("ai_paused_at"),
+      controllatoIl: new Date().toISOString(),
     };
+  }
+
+  // Risveglio consumato: il refresh forzato vale una volta sola.
+  if (daRisvegliare) {
+    await setSetting("ai_refresh_al_risveglio", "false");
   }
 
   const [news, calendar] = await Promise.all([
@@ -495,6 +800,26 @@ export async function runAnalysis(options?: { force?: boolean }) {
       aiSkipped: true,
     };
   }
+
+  // FINESTRA NOTIZIE: nei minuti intorno a un dato macro ad alto impatto il
+  // grafico non e' leggibile con la logica ICT. Quella candela ampia col corpo
+  // pieno non e' un displacement su liquidita': e' la reazione al dato, e i
+  // primi minuti sono tipicamente uno stop hunt in entrambe le direzioni.
+  //
+  // Il controllo sta PRIMA del filtro tecnico e della chiamata AI: nessun
+  // segnale e nessun costo OpenAI. Il monitor pero' continua a girare, quindi
+  // candele, eventi e contesto restano aggiornati e al primo ciclo dopo la
+  // finestra l'analisi riparte da un quadro completo.
+  //
+  // Nemmeno la generazione manuale (force) forza il passaggio: se stai
+  // premendo il pulsante trenta secondi prima dell'ISM, e' proprio la volta in
+  // cui non conviene.
+  // NOTIZIE: l'avviso NON blocca la generazione. Scelta esplicita -- si vuole
+  // poter operare anche a ridosso del dato. Quello che parte e' un avviso con
+  // i due livelli gia' calcolati, in tempo utile per piazzare gli ordini
+  // PRIMA dell'uscita (vedi avvisaNotizia).
+  await preparaScenario(calendar, marketSnapshot, news, adesso);
+  await avvisaNotizia(calendar, marketSnapshot, adesso);
 
   // Filtro tecnico locale: se non c'e' nulla di interessante sul grafico non
   // chiamiamo l'AI (risparmio credito). La generazione manuale (force) passa
@@ -553,19 +878,32 @@ export async function runAnalysis(options?: { force?: boolean }) {
     calendar,
     memoriaMercato: comprimiContesto(contesto) as unknown as Record<string, unknown>,
     eventiAttivi: eventiPerContesto,
-    scenario: null,
+    scenario: await scenarioCorrente(adesso),
   });
   const signal = validateSignal(rawSignal);
   const saved = await insertSignal(signal);
   await setSetting("setup_last_signal_id", saved.id);
 
   if (signal.direction === "BUY" || signal.direction === "SELL") {
+    // Notifica immediata alla nascita del segnale. Il testo dice comunque
+    // quanto dista l'entry dal prezzo, cosi' si vede a colpo d'occhio se il
+    // livello e' gia' buono o se e' un ordine da piazzare in attesa.
+    const ingresso = distanzaIngresso(
+      signal.direction,
+      Number(signal.entry),
+      marketSnapshot.xauusd,
+      marketSnapshot.atr15m ?? null
+    );
+
     sendPushToAll({
       title: `Nuovo segnale: ${signal.direction}`,
-      body: `Entry ${signal.entry} · Confidence ${signal.confidence}%`,
+      body: `${ingresso.testo} · SL ${Number(signal.stopLoss).toFixed(2)} · TP1 ${Number(
+        signal.tp1
+      ).toFixed(2)} · Conf ${signal.confidence}%`,
       url: "/",
     }).catch((err) => console.error("[runAnalysis] invio push fallito:", err));
   }
+
 
   return {
     signalId: saved.id,
@@ -722,12 +1060,20 @@ export async function runAnalysis5m(options?: { force?: boolean }) {
   const saved = await insertSignal5m(signal);
 
   if (signal.direction === "BUY" || signal.direction === "SELL") {
+    const ingresso = distanzaIngresso(
+      signal.direction,
+      Number(signal.entry),
+      marketSnapshot.xauusd,
+      marketSnapshot.atr5m ?? null
+    );
+
     sendPushToAll({
       title: `Nuovo segnale veloce: ${signal.direction}`,
-      body: `Entry ${signal.entry} · Confidence ${signal.confidence}%`,
+      body: `${ingresso.testo} · SL ${Number(signal.stopLoss).toFixed(2)} · Conf ${signal.confidence}%`,
       url: "/",
     }).catch((err) => console.error("[runAnalysis5m] invio push fallito:", err));
   }
+
 
   return {
     signalId: saved.id,

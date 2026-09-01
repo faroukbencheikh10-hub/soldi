@@ -103,9 +103,13 @@ export async function ensureSchema() {
       ON setup_events (tipo, timeframe, direzione, candela_ts);
     CREATE INDEX IF NOT EXISTS idx_setup_events_stato ON setup_events (stato, rilevato_il DESC);
 
+    -- M15 aggiunto quando la terna operativa e' passata da M5/M30/H1 a
+    -- M5/M15/M30. 'H1' resta ammesso: in tabella possono esistere righe H1
+    -- ancora ACTIVE scritte prima del passaggio, e devono poter essere
+    -- invalidate o fatte scadere invece di violare il vincolo.
     ALTER TABLE setup_events DROP CONSTRAINT IF EXISTS setup_events_timeframe_check;
     ALTER TABLE setup_events ADD CONSTRAINT setup_events_timeframe_check
-      CHECK (timeframe IN ('M5','M30','H1'));
+      CHECK (timeframe IN ('M5','M15','M30','H1'));
 
     CREATE TABLE IF NOT EXISTS market_context (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -122,11 +126,11 @@ export async function ensureSchema() {
       value TEXT NOT NULL
     );
 
-    -- Memoria persistente delle candele CHIUSE (H1/M30/M5). Tabella dedicata,
+    -- Memoria persistente delle candele CHIUSE (M30/M15/M5). Tabella dedicata,
     -- separata da market_snapshots.raw: qui dentro vanno solo le candele,
     -- leggibili singolarmente, non un blob JSON di tutto lo snapshot.
     CREATE TABLE IF NOT EXISTS candle_memory (
-      timeframe TEXT NOT NULL CHECK (timeframe IN ('H1','M30','M5')),
+      timeframe TEXT NOT NULL CHECK (timeframe IN ('M5','M15','M30','H1')),
       datetime TIMESTAMPTZ NOT NULL,
       open NUMERIC NOT NULL,
       high NUMERIC NOT NULL,
@@ -137,6 +141,15 @@ export async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_candle_memory_timeframe_datetime
       ON candle_memory (timeframe, datetime DESC);
+
+    -- CREATE TABLE IF NOT EXISTS non tocca una tabella gia' esistente: senza
+    -- questo ALTER, su un database gia' creato il vincolo resterebbe quello
+    -- vecchio ('H1','M30','M5') e il primo INSERT di una candela M15
+    -- fallirebbe. 'H1' resta ammesso per le righe gia' salvate, che la
+    -- retention eliminera' da sola.
+    ALTER TABLE candle_memory DROP CONSTRAINT IF EXISTS candle_memory_timeframe_check;
+    ALTER TABLE candle_memory ADD CONSTRAINT candle_memory_timeframe_check
+      CHECK (timeframe IN ('M5','M15','M30','H1'));
   `);
 }
 
@@ -424,25 +437,24 @@ export async function setSetting(key: string, value: string) {
   );
 }
 
+// MODALITA' SONNO
+// La pausa e' manuale e SENZA SCADENZA: resta attiva finche' non viene tolta
+// esplicitamente. Nessun timeout automatico: una pausa che si disattiva da
+// sola fa ripartire le chiamate AI a pagamento senza che nessuno lo sappia.
 export async function isAiPaused(): Promise<boolean> {
-  const value = await getSetting("ai_paused");
-  if (value !== "true") return false;
-
-  const pausedAtRaw = await getSetting("ai_paused_at");
-  const pausedAt = pausedAtRaw ? new Date(pausedAtRaw).getTime() : null;
-  const PAUSA_MAX_ORE = 2;
-  if (pausedAt !== null && Date.now() - pausedAt > PAUSA_MAX_ORE * 60 * 60 * 1000) {
-    await setAiPaused(false);
-    return false;
-  }
-
-  return true;
+  return (await getSetting("ai_paused")) === "true";
 }
 
+// Al risveglio viene alzato un flag: il ciclo successivo deve rifare
+// un'analisi completa invece di riusare il setup precedente.
 export async function setAiPaused(paused: boolean) {
+  const eraInPausa = (await getSetting("ai_paused")) === "true";
   await setSetting("ai_paused", paused ? "true" : "false");
   if (paused) {
     await setSetting("ai_paused_at", new Date().toISOString());
+  } else {
+    await setSetting("ai_risvegliato_at", new Date().toISOString());
+    if (eraInPausa) await setSetting("ai_refresh_al_risveglio", "true");
   }
 }
 
@@ -543,20 +555,24 @@ export async function getUltimoContesto() {
 }
 
 // ---------------------------------------------------------------------------
-// MEMORIA CANDELE (H1 / M30 / M5)
+// MEMORIA CANDELE (M30 / M15 / M5)
 //
 // Solo infrastruttura: salva e rende rileggibili le candele CHIUSE dei tre
-// timeframe. Nessuna funzione qui dentro viene letta dalla strategia o
-// dall'AI -- e' compito di chi la richiama decidere se e come usarla in
+// timeframe operativi. Nessuna funzione qui dentro viene letta dalla strategia
+// o dall'AI -- e' compito di chi la richiama decidere se e come usarla in
 // futuro. Deliberatamente separata da market_snapshots.raw (che resta un
 // blob JSON dell'intero snapshot, mai riletto candela per candela).
+//
+// H1 resta nel tipo e nella retention solo per le righe salvate prima del
+// passaggio a M15: non viene piu' scritto, ma va ancora ripulito.
 // ---------------------------------------------------------------------------
 
-export type CandleMemoryTimeframe = "H1" | "M30" | "M5";
+export type CandleMemoryTimeframe = "H1" | "M30" | "M15" | "M5";
 
 export const CANDLE_MEMORY_RETENTION_MS: Record<CandleMemoryTimeframe, number> = {
   H1: 72 * 60 * 60 * 1000,
   M30: 48 * 60 * 60 * 1000,
+  M15: 24 * 60 * 60 * 1000,
   M5: 12 * 60 * 60 * 1000,
 };
 

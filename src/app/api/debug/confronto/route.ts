@@ -61,14 +61,17 @@ export async function GET(req: NextRequest) {
         {
           prezzo: (r.market_snapshot as Riga).xauusd as number,
           candles: (r.market_snapshot as Riga).candles as never,
-          atr1h: (r.market_snapshot as Riga).atr1h as number | null,
           atr30m: (r.market_snapshot as Riga).atr30m as number | null,
+          atr15m: (r.market_snapshot as Riga).atr15m as number | null,
           atr5m: (r.market_snapshot as Riga).atr5m as number | null,
           liquidita24h: (r.market_snapshot as Riga).liquidita24h as never,
-          zoneH1: {
-            orderBlocks: (r.market_snapshot as Riga).ictOrderBlocksH1 as never,
-            fvg: (r.market_snapshot as Riga).ictFvgH1 as never,
-            livelliUguali: (r.market_snapshot as Riga).ictLivelliUgualiH1 as never,
+          // Snapshot vecchi non hanno i campi M15: su quelli le zone arrivano
+          // vuote e il contesto M15 risulta semplicemente non calcolabile,
+          // senza rompere il confronto storico.
+          zoneM15: {
+            orderBlocks: (r.market_snapshot as Riga).ictOrderBlocksM15 as never,
+            fvg: (r.market_snapshot as Riga).ictFvgM15 as never,
+            livelliUguali: (r.market_snapshot as Riga).ictLivelliUgualiM15 as never,
           },
           zoneM30: {
             orderBlocks: (r.market_snapshot as Riga).ictOrderBlocksM30 as never,

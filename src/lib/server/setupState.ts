@@ -23,7 +23,11 @@
 import { computeStructure } from "@/lib/server/ictStructure";
 
 export type TipoEvento = "sweep" | "displacement" | "bos" | "choch";
-export type Timeframe = "M5" | "M30" | "H1";
+// H1 non e' piu' un timeframe di analisi (le candele orarie servono solo a
+// calcolare liquidita_24h), ma resta nel tipo perche' in setup_events possono
+// esistere righe H1 ancora ACTIVE scritte prima del passaggio a M15: devono
+// poter essere lette, invalidate e fatte scadere come le altre.
+export type Timeframe = "M5" | "M15" | "M30" | "H1";
 export type Direzione = "rialzista" | "ribassista";
 
 export interface Candela {
@@ -52,8 +56,31 @@ export interface EventoAttivo extends EventoRilevato {
 export const TTL_MS: Record<Timeframe, number> = {
   H1: 4 * 60 * 60 * 1000,
   M30: 90 * 60 * 1000,
+  M15: 45 * 60 * 1000,
   M5: 20 * 60 * 1000,
 };
+
+// Durata nominale di una candela, per timeframe. Serve a stabilire se una
+// candela e' CHIUSA guardando l'orologio, non la sua posizione nell'array.
+export const DURATA_MS: Record<Timeframe, number> = {
+  H1: 60 * 60 * 1000,
+  M30: 30 * 60 * 1000,
+  M15: 15 * 60 * 1000,
+  M5: 5 * 60 * 1000,
+};
+
+// Nessuna tolleranza: una candela conta come chiusa solo quando la sua durata
+// e' trascorsa per intero.
+//
+// Una versione precedente concedeva 5 secondi di margine per lo scarto fra
+// l'orologio del provider e il nostro. E' sbagliato: entrambe le fonti
+// restituiscono la candela ANCORA IN FORMAZIONE in testa all'array
+// (verificato sugli snapshot reali: alle 03:17 l'indice 0 del 5m era la
+// candela delle 03:15), quindi quel margine faceva passare per chiusa una
+// candela ancora viva, e un BOS poteva essere rilevato su una struttura che
+// il resto della candela avrebbe potuto smentire. Meglio aspettare qualche
+// secondo in piu' che registrare un evento inesistente.
+const TOLLERANZA_CHIUSURA_MS = 0;
 
 const CANDELE_DA_ISPEZIONARE = 12;
 const FINESTRA_LIQUIDITA = 20;
@@ -66,17 +93,23 @@ interface CandelaNum {
   low: number;
   close: number;
   ts: string;
+  // Posizione della candela nell'array ORIGINALE ricevuto dal chiamante.
+  // computeStructure vuole la serie grezza, e normalizza() puo' aver scartato
+  // candele malformate: senza questo indice le due numerazioni divergerebbero
+  // e si analizzerebbe una finestra spostata.
+  idxOriginale: number;
 }
 
 function normalizza(candele: Candela[] | undefined): CandelaNum[] {
   if (!Array.isArray(candele)) return [];
   return candele
-    .map((c) => ({
+    .map((c, idxOriginale) => ({
       open: Number(c.open),
       high: Number(c.high),
       low: Number(c.low),
       close: Number(c.close),
       ts: c.datetime,
+      idxOriginale,
     }))
     .filter(
       (c) =>
@@ -88,20 +121,66 @@ function normalizza(candele: Candela[] | undefined): CandelaNum[] {
     );
 }
 
-// Le candele arrivano dalla piu' recente alla piu' vecchia. L'indice 0 e' la
-// candela ancora in formazione: viene ignorata, si guardano solo le chiuse.
+/**
+ * Indice della prima candela CHIUSA, contando dalla piu' recente.
+ *
+ * Prima si assumeva che fosse sempre l'indice 1, cioe' che l'indice 0 fosse
+ * per definizione la candela in formazione. E' vero per Twelve Data, che
+ * restituisce la barra in corso in testa; NON e' garantito per l'endpoint
+ * historical-market-data di MetaApi, che e' un archivio di candele gia'
+ * chiuse. Con quella fonte lo scarto fisso di uno buttava via la candela
+ * chiusa PIU' RECENTE: un timeframe intero di ritardo su ogni evento, che si
+ * sommava all'attesa della chiusura successiva.
+ *
+ * Qui la domanda viene posta all'orologio: una candela e' chiusa quando la sua
+ * apertura piu' la durata del timeframe e' gia' passata. Funziona con
+ * entrambe le fonti e non si rompe se un provider cambia comportamento.
+ */
+export function indicePrimaCandelaChiusa(
+  candele: Candela[] | undefined,
+  timeframe: Timeframe,
+  adesso: number = Date.now()
+): number {
+  const c = normalizza(candele);
+  const durata = DURATA_MS[timeframe];
+  for (let i = 0; i < c.length; i++) {
+    const apertura = new Date(c[i].ts).getTime();
+    if (apertura + durata <= adesso + TOLLERANZA_CHIUSURA_MS) return i;
+  }
+  return c.length;
+}
+
+// Le candele arrivano dalla piu' recente alla piu' vecchia. L'analisi parte
+// dalla prima candela realmente CHIUSA (vedi indicePrimaCandelaChiusa): quella
+// eventualmente ancora in formazione viene saltata, ma nessuna candela chiusa
+// viene piu' scartata solo per la sua posizione nell'array.
 export function rilevaEventi(
   candele: Candela[] | undefined,
   atr: number | null,
-  timeframe: Timeframe
+  timeframe: Timeframe,
+  adesso: number = Date.now()
 ): EventoRilevato[] {
   const c = normalizza(candele);
   if (c.length < FINESTRA_LIQUIDITA + 3) return [];
 
   const eventi: EventoRilevato[] = [];
-  const limite = Math.min(CANDELE_DA_ISPEZIONARE, c.length - FINESTRA_LIQUIDITA - 2);
 
-  for (let i = 1; i <= limite; i++) {
+  const durata = DURATA_MS[timeframe];
+  let inizio = c.length;
+  for (let i = 0; i < c.length; i++) {
+    const apertura = new Date(c[i].ts).getTime();
+    if (apertura + durata <= adesso + TOLLERANZA_CHIUSURA_MS) {
+      inizio = i;
+      break;
+    }
+  }
+
+  // Ultima posizione che lascia ancora dietro di se' la finestra di liquidita'
+  // piu' la candela precedente richiesta dal displacement.
+  const ultimoIspezionabile = c.length - FINESTRA_LIQUIDITA - 2;
+  const fine = Math.min(inizio + CANDELE_DA_ISPEZIONARE - 1, ultimoIspezionabile);
+
+  for (let i = inizio; i <= fine; i++) {
     const cand = c[i];
     const precedenti = c.slice(i + 1, i + 1 + FINESTRA_LIQUIDITA);
     if (precedenti.length < 5) continue;
@@ -141,9 +220,10 @@ export function rilevaEventi(
     }
 
     // BOS / CHoCH: si riusa computeStructure applicata alla serie COME ERA a
-    // quella candela (slice(i) mette la candela i in posizione 0, che e' il
-    // "prezzo attuale" per computeStructure).
-    const serie = Array.isArray(candele) ? candele.slice(i) : [];
+    // quella candela (lo slice mette la candela i in posizione 0, che e' il
+    // "prezzo attuale" per computeStructure). Si taglia sull'indice originale
+    // perche' normalizza() puo' aver scartato candele malformate.
+    const serie = Array.isArray(candele) ? candele.slice(cand.idxOriginale) : [];
     if (serie.length >= 5) {
       const struttura = computeStructure(serie);
       if (struttura.evento && struttura.direzioneEvento && struttura.livelloRotto !== null) {
@@ -185,7 +265,9 @@ export function motivoInvalidazione(evento: EventoAttivo, candele: Candela[] | u
 export function eventoScaduto(evento: EventoAttivo, adesso: number): boolean {
   const nascita = new Date(evento.rilevatoIl).getTime();
   if (!Number.isFinite(nascita)) return false;
-  return adesso - nascita > TTL_MS[evento.timeframe];
+  const ttl = TTL_MS[evento.timeframe];
+  if (ttl === undefined) return false;
+  return adesso - nascita > ttl;
 }
 
 export interface Zona {
@@ -229,11 +311,11 @@ export interface ZonaOccupata {
   bottom: number;
 }
 
-// Individua le zone operative (Order Block / FVG, su H1/M30/M5) in cui il
+// Individua le zone operative (Order Block / FVG, su M30/M15/M5) in cui il
 // prezzo si trova ora. Sostituisce il vecchio controllo booleano
 // "prezzoDentroUnaZona" ai fini della fingerprint: un semplice true/false non
 // distingue "il prezzo e' entrato in un nuovo Order Block M30 ribassista" da
-// "e' rientrato nella stessa FVG H1 di prima" -- due situazioni diverse che
+// "e' rientrato nella stessa FVG M15 di prima" -- due situazioni diverse che
 // devono riattivare l'analisi in modo diverso (o non riattivarla affatto se
 // e' la stessa zona di gia').
 export function zoneOccupateDalPrezzo(prezzo: number, gruppi: (ZonaConTipo[] | undefined)[]): ZonaOccupata[] {

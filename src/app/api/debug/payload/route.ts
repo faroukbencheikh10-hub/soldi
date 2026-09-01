@@ -44,14 +44,14 @@ export async function GET(req: NextRequest) {
       {
         prezzo: marketSnapshot.xauusd,
         candles: marketSnapshot.candles,
-        atr1h: marketSnapshot.atr1h,
         atr30m: marketSnapshot.atr30m,
+        atr15m: marketSnapshot.atr15m,
         atr5m: marketSnapshot.atr5m,
         liquidita24h: marketSnapshot.liquidita24h,
-        zoneH1: {
-          orderBlocks: marketSnapshot.ictOrderBlocksH1,
-          fvg: marketSnapshot.ictFvgH1,
-          livelliUguali: marketSnapshot.ictLivelliUgualiH1,
+        zoneM15: {
+          orderBlocks: marketSnapshot.ictOrderBlocksM15,
+          fvg: marketSnapshot.ictFvgM15,
+          livelliUguali: marketSnapshot.ictLivelliUgualiM15,
         },
         zoneM30: {
           orderBlocks: marketSnapshot.ictOrderBlocksM30,
@@ -92,8 +92,8 @@ export async function GET(req: NextRequest) {
         scenario: nuovo.scenario,
         sintesi_d1_h4: nuovo.sintesi_d1_h4,
         candele_chiuse_recenti: {
-          h1: nuovo.candele_chiuse_recenti.h1.length,
           m30: nuovo.candele_chiuse_recenti.m30.length,
+          m15: nuovo.candele_chiuse_recenti.m15.length,
           m5: nuovo.candele_chiuse_recenti.m5.length,
         },
         alias_eventi: nuovo.eventi_attivi,

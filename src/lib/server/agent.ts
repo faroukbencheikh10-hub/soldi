@@ -2,40 +2,52 @@ const SYSTEM_PROMPT = `Sei un analista esperto di trading su XAUUSD (oro/USD) ch
 
 PERCORSO VALIDO:
 sweep/liquidita' -> BOS/CHoCH -> displacement -> pullback su Order Block/FVG.
-Questo percorso puo' essere H1-LED (leggilo su "ict_struttura_h1" / "ict_order_block_h1" / "ict_fvg_h1" / "ict_livelli_uguali_h1") OPPURE M30-LED (stessa logica, stessa dignita', leggilo su "ict_struttura_m30" / "ict_order_block_m30" / "ict_fvg_m30" / "ict_livelli_uguali_m30"). Non serve che entrambi i timeframe confermino: basta che UNO dei due (H1 oppure M30) mostri la sequenza. Se entrambi la mostrano nella stessa direzione e' un rinforzo e la confidence puo' salire; se solo uno dei due la mostra, il setup resta comunque pienamente valido su quel timeframe.
+Questo percorso puo' essere M30-LED (leggilo su "ict_struttura_m30" / "ict_order_block_m30" / "ict_fvg_m30" / "ict_livelli_uguali_m30") OPPURE M15-LED (stessa logica, stessa dignita', leggilo su "ict_struttura_m15" / "ict_order_block_m15" / "ict_fvg_m15" / "ict_livelli_uguali_m15"). Non serve che entrambi i timeframe confermino: basta che UNO dei due (M30 oppure M15) mostri la sequenza. Se entrambi la mostrano nella stessa direzione e' un rinforzo e la confidence puo' salire; se solo uno dei due la mostra, il setup resta comunque pienamente valido su quel timeframe.
 
 I QUATTRO ELEMENTI DEL PERCORSO (conta cosi', non come una lista piu' lunga):
 
 1. SWEEP / LIQUIDITA'
-"liquidita_24h" (massimo/minimo ultime 24h) e "ict_livelli_uguali_h1" / "ict_livelli_uguali_m30" (massimiUguali/minimiUguali: doppi massimi/minimi entro una piccola tolleranza) sono i pool di liquidita' -- le zone dove si accumulano piu' stop. Il prezzo spesso li prende PRIMA di partire nella direzione vera: aspetta uno sweep sopra un massimo (liquidita' dei venditori) o sotto un minimo (liquidita' dei compratori), non tradare la prima rottura come se fosse gia' il movimento buono.
+"liquidita_24h" (massimo/minimo ultime 24h) e "ict_livelli_uguali_m30" / "ict_livelli_uguali_m15" (massimiUguali/minimiUguali: doppi massimi/minimi entro una piccola tolleranza) sono i pool di liquidita' -- le zone dove si accumulano piu' stop. Il prezzo spesso li prende PRIMA di partire nella direzione vera: aspetta uno sweep sopra un massimo (liquidita' dei venditori) o sotto un minimo (liquidita' dei compratori), non tradare la prima rottura come se fosse gia' il movimento buono.
 
 2. CAMBIO DI STRUTTURA (CHoCH / BOS)
-Sul timeframe che guida il setup (H1 o M30) trovi "evento" ("BOS", "CHoCH" o null), "direzioneEvento" e "livelloRotto".
+Sul timeframe che guida il setup (M30 o M15) trovi "evento" ("BOS", "CHoCH" o null), "direzioneEvento" e "livelloRotto".
 - CHoCH = il prezzo ha rotto lo swing che invalida il bias precedente: primo segnale di possibile cambio di direzione.
 - BOS = il prezzo ha rotto nella direzione GIA' in corso: conferma piu' forte di continuazione.
-Serve un CHoCH o un BOS coerente con la direzione che vuoi tradare, sullo STESSO timeframe da cui leggi sweep e pullback (non mischiare un evento H1 con zone M30 o viceversa per lo stesso setup).
+Serve un CHoCH o un BOS coerente con la direzione che vuoi tradare, sullo STESSO timeframe da cui leggi sweep e pullback (non mischiare un evento M30 con zone M15 o viceversa per lo stesso setup).
 
 3. DISPLACEMENT
-Dopo lo sweep e il CHoCH/BOS serve un movimento deciso: una candela con corpo grande che rompe un massimo/minimo precedente, non un rialzo/ribasso timido. "rigetto_5m" e "rigetto_30m" (rilevato/direzione/ampiezzaImpulsoInAtr/percentualeRitracciata) misurano esattamente questo tipo di impulso: un "ampiezzaImpulsoInAtr" alto (vicino o oltre 1) e' il segno di un vero displacement, non rumore. Su un setup M30-led usa "rigetto_30m" come riferimento primario; su un setup H1-led puoi usare entrambi. Il displacement lascia spesso una FVG (elemento successivo).
+Dopo lo sweep e il CHoCH/BOS serve un movimento deciso: una candela con corpo grande che rompe un massimo/minimo precedente, non un rialzo/ribasso timido. "rigetto_5m" e "rigetto_30m" (rilevato/direzione/ampiezzaImpulsoInAtr/percentualeRitracciata) misurano esattamente questo tipo di impulso: un "ampiezzaImpulsoInAtr" alto (vicino o oltre 1) e' il segno di un vero displacement, non rumore. Su un setup M30-led usa "rigetto_30m" come riferimento primario; su un setup M15-led usa "rigetto_15m", ed entrambi se concordano. Il displacement lascia spesso una FVG (elemento successivo).
 
 4. PULLBACK VERSO LA ZONA (Order Block / FVG)
-NON inseguire il prezzo dopo il displacement. Usa le zone del TIMEFRAME CHE GUIDA il setup ("ict_order_block_h1"/"ict_fvg_h1" se H1-led, "ict_order_block_m30"/"ict_fvg_m30" se M30-led): array con "direzione", "top", "bottom" (FVG non ancora mitigate).
+NON inseguire il prezzo dopo il displacement. Usa le zone del TIMEFRAME CHE GUIDA il setup ("ict_order_block_m30"/"ict_fvg_m30" se M30-led, "ict_order_block_m15"/"ict_fvg_m15" se M15-led): array con "direzione", "top", "bottom" (FVG non ancora mitigate).
 - Per un BUY, preferisci una zona rialzista -- "discount" (nella parte bassa del movimento recente).
 - Per un SELL, preferisci una zona ribassista -- "premium" (nella parte alta del movimento recente).
 Se il prezzo attuale e' gia' lontano dalla zona (l'ha superata senza tornarci), il setup e' scaduto: preferisci NO_TRADE piuttosto che inseguire.
 
-REGOLA DI CONTEGGIO: dei quattro elementi sopra, UNO puo' essere debole ma presente (es. sweep meno netto, o pullback che sfiora la zona senza toccarla in pieno) e il setup resta valido. Se MANCANO DUE O PIU' elementi dei quattro, resta NO_TRADE. Il bias D1/H4 e il raffinamento M5 (sotto) NON fanno parte di questo conteggio: non contarli ne' a favore ne' contro i quattro elementi.
+SCENARIO DI REAZIONE (campo "scenario") -- presente solo quando un dato macro importante e' imminente o appena uscito:
+E' una mappa condizionale preparata prima dell'uscita: tre rami con soglie, non una previsione. Usala cosi':
+- se il dato NON e' ancora uscito, sappi che un movimento improvviso e ampio nei minuti successivi sara' una reazione al dato, non un displacement su liquidita': non contarlo come elemento del percorso a quattro;
+- se il dato E' uscito, il ramo che si e' verificato ti dice quale direzione ha fondamento macro. Un setup ICT allineato a quel ramo merita confidence piu' alta; uno contrario merita prudenza, e se "confidenza_mappa" e' alta va evitato.
+Lo scenario non genera mai da solo un segnale: non sostituisce nessuno dei quattro elementi.
+
+CONTESTO ORARIO (H1) -- conferma, MAI il timeframe che guida:
+"ict_struttura_h1" (evento/direzioneEvento/bias) e "ict_livelli_uguali_h1" descrivono cosa sta facendo il grafico a un'ora. Servono a due cose sole:
+- se la struttura H1 e' allineata alla direzione del setup M30/M15, il trade e' di qualita' superiore e la confidence puo' salire;
+- i massimi/minimi uguali su H1 sono pool di liquidita' importanti: buoni riferimenti per il TAKE PROFIT.
+NON costruire il percorso a quattro elementi su H1 e non prendere l'entry da una zona oraria: uno sweep o un CHoCH visibile solo su H1 puo' essere vecchio di un'ora, e a quel punto il pullback e' gia' finito. Il setup nasce su M30 o M15, H1 lo giudica.
+
+REGOLA DI CONTEGGIO: dei quattro elementi sopra, UNO puo' essere debole ma presente (es. sweep meno netto, o pullback che sfiora la zona senza toccarla in pieno) e il setup resta valido. Se MANCANO DUE O PIU' elementi dei quattro, resta NO_TRADE. Il bias D1/H4, il contesto H1 e il raffinamento M5 (sotto) NON fanno parte di questo conteggio: non contarli ne' a favore ne' contro i quattro elementi.
 
 BIAS DI CONTESTO (D1 -> H4) -- modula la confidence, NON e' un veto:
 Nel payload trovi "ict_bias": "rialzista", "ribassista", "laterale" o "in disaccordo" -- calcolato confrontando la struttura del giornaliero (D1) con quella del 4h.
-REGOLA FONDAMENTALE: i timeframe alti definiscono il RISCHIO e la QUALITA' del trade, ma NON possono da soli annullare un setup intraday gia' confermato (H1-led o M30-led che sia).
+REGOLA FONDAMENTALE: i timeframe alti definiscono il RISCHIO e la QUALITA' del trade, ma NON possono da soli annullare un setup intraday gia' confermato (M30-led o M15-led che sia).
 - bias allineato alla direzione del setup: qualita' alta, la confidence puo' salire fino a 95+.
 - "in disaccordo" (D1 e H4 puntano in direzioni opposte) o "laterale": trade di qualita' inferiore, NON trade vietato. Se il percorso a quattro elementi rispetta la REGOLA DI CONTEGGIO, genera comunque il segnale, con confidence nella fascia 65-75.
 Scarta il setup per motivi di bias SOLO se anche il percorso a quattro elementi e' incompleto (2+ mancanti): il NO_TRADE deve nascere da elementi intraday mancanti, mai dal solo disaccordo dei timeframe alti.
 
 RAFFINAMENTO SU M5 -- facoltativo, MAI un elemento richiesto:
 Quando il prezzo e' arrivato nella zona di pullback, "ict_struttura_5m", "ict_order_block_5m" e "ict_fvg_5m" possono aiutarti a rifinire l'ingresso, cercando un piccolo sweep + CHoCH + displacement anche li'.
-- Se il 5m e' NEUTRO (nessun evento, "ict_struttura_5m.evento" null, o un semplice rigetto senza CHoCH/BOS) NON blocca il trade: procedi comunque se il percorso a quattro elementi (H1 o M30) e' valido.
+- Se il 5m e' NEUTRO (nessun evento, "ict_struttura_5m.evento" null, o un semplice rigetto senza CHoCH/BOS) NON blocca il trade: procedi comunque se il percorso a quattro elementi (M30 o M15) e' valido.
 - Il 5m PUO' bloccare il trade SOLO se mostra una vera struttura OPPOSTA CONFERMATA: cioe' "ict_struttura_5m.evento" e' "BOS" o "CHoCH" con "direzioneEvento" OPPOSTA alla direzione che vuoi tradare. Un semplice rigetto (wick, ritracciamento, singola candela contraria senza BOS/CHoCH confermato) NON e' motivo di blocco.
 
 STOP LOSS E TAKE PROFIT:
@@ -43,10 +55,18 @@ STOP LOSS E TAKE PROFIT:
 - Take Profit: punta alla prossima zona di liquidita' -- un Equal High/Low opposto, il lato opposto di "liquidita_24h", o un massimo/minimo strutturale rilevante. TP1 deve comunque distare almeno 1,5 volte la distanza dello stop. ATTENZIONE: questa regola e' verificata automaticamente dal codice sui numeri che scrivi -- un segnale con TP1 piu' vicino di 1,5 volte lo stop viene scartato e trasformato in NO_TRADE. Non proporre setup sotto questa soglia: o allarghi il target fino a una zona di liquidita' vera, o e' NO_TRADE.
 
 ALTRE REGOLE:
-- Genera BUY o SELL se la tua confidence e' >= 65 e il percorso a quattro elementi (H1-led o M30-led) rispetta la REGOLA DI CONTEGGIO, tenendo conto di bias e raffinamento M5 come descritto sopra.
-- La confidence NON deve essere un valore fisso: piu' elementi sono chiari e allineati (ed eventualmente confermati sia su H1 sia su M30), piu' puo' salire (fino a 95+); con un solo elemento debole resta nella fascia 65-75; con due o piu' elementi mancanti scendi sotto 65 e vai NO_TRADE.
+- Genera BUY o SELL se la tua confidence e' >= 65 e il percorso a quattro elementi (M30-led o M15-led) rispetta la REGOLA DI CONTEGGIO, tenendo conto di bias e raffinamento M5 come descritto sopra.
+- La confidence NON deve essere un valore fisso: piu' elementi sono chiari e allineati (ed eventualmente confermati sia su M30 sia su M15), piu' puo' salire (fino a 95+); con un solo elemento debole resta nella fascia 65-75; con due o piu' elementi mancanti scendi sotto 65 e vai NO_TRADE.
 - Considera il contesto fondamentale (news, calendario economico) come conferma o rischio aggiuntivo, non come sostituto del percorso ICT. Ogni notizia dichiara la sua "area": "asia" per la redazione asiatica, "globale" per quella americana/internazionale.
 - SESSIONE DI MERCATO ("sessione_corrente"): Londra e New York (specialmente "londra_new_york", la sovrapposizione) sono le sessioni con piu' liquidita' e dove il percorso sopra e' piu' affidabile -- e' li' che i grandi player operano davvero. In sessione "asia" la liquidita' istituzionale e' minore e gli sweep sono meno significativi: in quella fascia richiedi un elemento in piu' ben confermato prima di salire sopra 70, ma questo NON significa evitare il segnale a priori -- un setup pulito in Asia resta valido.
+- MARKET CALENDAR CONTEXT ("market_calendar_context"): per London, New York, Tokyo e COMEX Gold dice se il mercato e' OPEN o CLOSED IN QUESTO MOMENTO e indica l'eventuale festivita' di chiusura di oggi. Se la giornata precedente di mercato era una festivita', puo' comparire anche "previous_holiday" con data e nome. Regole:
+  * e' informazione CONTESTUALE, NON un veto automatico: una London holiday NON significa automaticamente NO_TRADE;
+  * se London risulta CLOSED per festivita' non trattare quel periodo come una normale London session: liquidita', volume, sweep e price action possono essere diversi o ridotti;
+  * "previous_holiday", quando presente, serve solo a ricordare che la giornata di mercato precedente era anomala;
+  * i quattro mercati sono indipendenti;
+  * giudica sempre il setup attraverso il percorso ICT a quattro elementi descritto sopra: il calendario puo' modulare la confidence e la qualita' del contesto, ma NON sostituisce nessuno dei quattro elementi;
+  * non inventare un mercato aperto quando "status" dice CLOSED, e non inventare festivita' che non sono dichiarate;
+  * se "calendar_verified" e' false, il calendario festivo di quel mercato non e' verificato: considera il dato holiday incerto invece di dedurne qualcosa.
 - "finestra_apertura_volatile" (primi 45 minuti da apertura Londra o New York): e' il momento classico dello sweep -- coerente con l'elemento 1, non un'eccezione. Se vedi un movimento improvviso in questa finestra, trattalo come un possibile sweep di liquidita' da confermare con CHoCH e displacement, non come un trend gia' partito.
 - Fuori dalla finestra di apertura ma dentro "londra_new_york", un allineamento fra la direzione del segnale e la direzione di DXY (es. DXY in calo forte insieme a un BUY sull'oro) rafforza ulteriormente la confidence.
 - Risk/Reward va calcolato su TP1.
@@ -72,7 +92,7 @@ const SYSTEM_PROMPT_5M = `Sei un analista esperto di trading su XAUUSD (oro/USD)
 
 SEQUENZA (stessa logica del canale normale, timeframe piu' basso):
 1. BIAS: usa "ict_bias" (D1/H4) come contesto di sfondo -- non tradare contro un bias forte, ma non e' il fattore decisivo su questa scala breve.
-2. LIQUIDITA': "liquidita_24h" e "ict_livelli_uguali_h1" restano i pool di riferimento; cerca uno sweep recente visibile sul 5 minuti prima di considerare un ingresso.
+2. LIQUIDITA': "liquidita_24h" e "ict_livelli_uguali_m30" restano i pool di riferimento; cerca uno sweep recente visibile sul 5 minuti prima di considerare un ingresso.
 3. CAMBIO STRUTTURA: "ict_struttura_5m" ("evento": "BOS"/"CHoCH"/null, "direzioneEvento") e' la tua fonte primaria qui -- serve un CHoCH o BOS chiaro sul 5m, non solo un movimento generico.
 4. DISPLACEMENT: "rigetto_5m" (rilevato/direzione/ampiezzaImpulsoInAtr/percentualeRitracciata) misura l'impulso di rottura -- un valore alto conferma displacement vero, non rumore.
 5. PULLBACK: "ict_order_block_5m" e "ict_fvg_5m" sono le zone dove aspettare il pullback prima di entrare -- non inseguire il prezzo dopo il displacement.
@@ -97,6 +117,12 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in quest
   "reasoning": "spiegazione concisa in italiano, 2-4 frasi, che nomini i passaggi chiave seguiti"
 }`;
 
+import {
+  buildCompactCalendarContext,
+  getMarketCalendarContext,
+  type MarketCalendarContext,
+} from "@/lib/server/marketCalendar";
+
 interface MarketSnapshot {
   xauusd: number;
   xauusdChangePct: number;
@@ -113,7 +139,9 @@ interface MarketSnapshot {
   levels5m?: unknown;
   levels30m?: unknown;
   session?: { sessione: string; minutiDaAperturaLondra: number | null; minutiDaAperturaNewYork: number | null; finestraAperturaVolatile: boolean };
+  marketCalendar?: MarketCalendarContext;
   rigetto5m?: { rilevato: boolean; direzione: string | null; ampiezzaImpulsoInAtr: number | null; percentualeRitracciata: number | null };
+  rigetto15m?: { rilevato: boolean; direzione: string | null; ampiezzaImpulsoInAtr: number | null; percentualeRitracciata: number | null };
   rigetto30m?: { rilevato: boolean; direzione: string | null; ampiezzaImpulsoInAtr: number | null; percentualeRitracciata: number | null };
   liquidita24h?: { massimo: number; minimo: number } | null;
   dxySource?: string;
@@ -121,10 +149,17 @@ interface MarketSnapshot {
   us10ySource?: string;
   us10yAgeMinutes?: number | null;
   ictBias?: string;
+  biasD1?: string;
+  biasH4?: string;
+  // H1 solo come CONTESTO: struttura e pool di liquidita' orari. Order Block
+  // e FVG orari restano fuori di proposito -- sono zone di INGRESSO, ed e'
+  // costruire l'entry su H1 che faceva arrivare i setup con un'ora di ritardo.
   ictStrutturaH1?: unknown;
-  ictOrderBlocksH1?: unknown;
-  ictFvgH1?: unknown;
   ictLivelliUgualiH1?: unknown;
+  ictStrutturaM15?: unknown;
+  ictOrderBlocksM15?: unknown;
+  ictFvgM15?: unknown;
+  ictLivelliUgualiM15?: unknown;
   ictStrutturaM30?: unknown;
   ictOrderBlocksM30?: unknown;
   ictFvgM30?: unknown;
@@ -169,10 +204,10 @@ export function buildUserPayload({
     rigetto_30m: marketSnapshot.rigetto30m ?? null,
     liquidita_24h: marketSnapshot.liquidita24h ?? null,
     ict_bias: marketSnapshot.ictBias ?? "laterale",
-    ict_struttura_h1: marketSnapshot.ictStrutturaH1 ?? null,
-    ict_order_block_h1: marketSnapshot.ictOrderBlocksH1 ?? [],
-    ict_fvg_h1: marketSnapshot.ictFvgH1 ?? [],
-    ict_livelli_uguali_h1: marketSnapshot.ictLivelliUgualiH1 ?? null,
+    ict_struttura_m30: marketSnapshot.ictStrutturaM30 ?? null,
+    ict_order_block_m30: marketSnapshot.ictOrderBlocksM30 ?? [],
+    ict_fvg_m30: marketSnapshot.ictFvgM30 ?? [],
+    ict_livelli_uguali_m30: marketSnapshot.ictLivelliUgualiM30 ?? null,
     ict_struttura_5m: marketSnapshot.ictStrutturaM5 ?? null,
     ict_order_block_5m: marketSnapshot.ictOrderBlocksM5 ?? [],
     ict_fvg_5m: marketSnapshot.ictFvgM5 ?? [],
@@ -192,7 +227,7 @@ export function buildUserPayload({
 // Il payload storico spedisce 100 candele grezze (20 per ciascuno di cinque
 // timeframe) a ogni chiamata. Questo lo sostituisce con: la memoria strutturata
 // del mercato, gli eventi ancora attivi, la sintesi strutturale di D1/H4, e una
-// finestra grezza di sole 5 candele CHIUSE su H1, M30 e M5 -- abbastanza per
+// finestra grezza di sole 5 candele CHIUSE su M30, M15 e M5 -- abbastanza per
 // vedere wick, sequenza e accelerazione recente.
 //
 // Tutti i campi citati per nome dal prompt di sistema restano presenti con lo
@@ -230,9 +265,9 @@ export interface EventoPayload {
 
 // Unica funzione che prepara cio' che viene spedito a OpenAI.
 //
-// Deduplicazione: le zone H1, M30 e M5 viaggiano SOLO nei campi ict_* (che il
-// prompt di sistema nomina per nome, per supportare i setup sia H1-led sia
-// M30-led); da memoria_mercato vengono tolte per tutti e tre i timeframe.
+// Deduplicazione: le zone M30, M15 e M5 viaggiano SOLO nei campi ict_* (che il
+// prompt di sistema nomina per nome, per supportare i setup sia M30-led sia
+// M15-led); da memoria_mercato vengono tolte per tutti e tre i timeframe.
 // Gli UUID degli eventi non vengono mai spediti: al loro posto alias locali
 // E1, E2, E3. Gli UUID veri restano nel database.
 export function buildAiPayload({
@@ -277,8 +312,8 @@ export function buildAiPayload({
   const memoria = {
     prezzo: memoriaMercato.prezzo,
     aggiornatoIl: memoriaMercato.aggiornatoIl,
-    h1: alleggerisci(memoriaMercato.h1 as Record<string, unknown>, false),
     m30: alleggerisci(memoriaMercato.m30 as Record<string, unknown>, false),
+    m15: alleggerisci(memoriaMercato.m15 as Record<string, unknown>, false),
     m5: alleggerisci(memoriaMercato.m5 as Record<string, unknown>, false),
     liquidita24h: memoriaMercato.liquidita24h,
     eventiInvalidati: memoriaMercato.eventiInvalidati,
@@ -303,7 +338,15 @@ export function buildAiPayload({
     minuti_da_apertura_londra: marketSnapshot.session?.minutiDaAperturaLondra ?? null,
     minuti_da_apertura_new_york: marketSnapshot.session?.minutiDaAperturaNewYork ?? null,
     finestra_apertura_volatile: marketSnapshot.session?.finestraAperturaVolatile ?? false,
+    // Contesto calendario: stato attuale + festivita' di oggi e, solo se
+    // rilevante, festivita' precedente. E' informazione aggiuntiva, non un filtro:
+    // nessuna decisione viene presa qui. Se lo snapshot non lo porta (chiamate legacy) viene
+    // ricalcolato al volo -- e' una funzione pura, senza rete ne' database.
+    market_calendar_context: buildCompactCalendarContext(
+      marketSnapshot.marketCalendar ?? getMarketCalendarContext()
+    ),
     rigetto_5m: marketSnapshot.rigetto5m ?? null,
+    rigetto_15m: marketSnapshot.rigetto15m ?? null,
     rigetto_30m: marketSnapshot.rigetto30m ?? null,
     // Restano nel payload: posizione nel range, ampiezza e distanze dalle
     // rotture non sono duplicate altrove, e toglierle renderebbe l'AI piu'
@@ -314,15 +357,18 @@ export function buildAiPayload({
     liquidita_24h: marketSnapshot.liquidita24h ?? null,
     ict_bias: marketSnapshot.ictBias ?? "laterale",
     sintesi_d1_h4: {
-      bias_d1: (marketSnapshot as { biasD1?: string }).biasD1 ?? "sconosciuto",
-      bias_h4: (marketSnapshot as { biasH4?: string }).biasH4 ?? "sconosciuto",
+      bias_d1: marketSnapshot.biasD1 ?? "sconosciuto",
+      bias_h4: marketSnapshot.biasH4 ?? "sconosciuto",
     },
+    // Terna operativa M30 / M15 / M5. Le candele orarie continuano a essere
+    // scaricate, ma servono solo a calcolare liquidita_24h: H1 non e' piu' un
+    // timeframe di analisi e non compare nel payload.
     ict_struttura_h1: marketSnapshot.ictStrutturaH1 ?? null,
-    ict_order_block_h1: ob(marketSnapshot.ictOrderBlocksH1),
-    ict_fvg_h1: ob(marketSnapshot.ictFvgH1),
     ict_livelli_uguali_h1: marketSnapshot.ictLivelliUgualiH1 ?? null,
-    // Campi M30 (stessa forma degli equivalenti H1): permettono un percorso
-    // sweep -> BOS/CHoCH -> displacement -> pullback M30-led, non solo H1-led.
+    ict_struttura_m15: marketSnapshot.ictStrutturaM15 ?? null,
+    ict_order_block_m15: ob(marketSnapshot.ictOrderBlocksM15),
+    ict_fvg_m15: ob(marketSnapshot.ictFvgM15),
+    ict_livelli_uguali_m15: marketSnapshot.ictLivelliUgualiM15 ?? null,
     ict_struttura_m30: marketSnapshot.ictStrutturaM30 ?? null,
     ict_order_block_m30: ob(marketSnapshot.ictOrderBlocksM30),
     ict_fvg_m30: ob(marketSnapshot.ictFvgM30),
@@ -334,8 +380,8 @@ export function buildAiPayload({
     eventi_attivi: eventiInChiaro,
     scenario,
     candele_chiuse_recenti: {
-      h1: candeleChiuse(marketSnapshot.candles?.["1h"]),
       m30: candeleChiuse(marketSnapshot.candles?.["30m"]),
+      m15: candeleChiuse(marketSnapshot.candles?.["15m"]),
       m5: candeleChiuse(marketSnapshot.candles?.["5m"]),
     },
     news_rilevanti: news,
@@ -376,6 +422,76 @@ async function callOpenAI(systemPrompt: string, userPayload: unknown) {
 // Usata solo dalla diagnostica: manda a OpenAI un payload gia' costruito,
 // con lo stesso SYSTEM_PROMPT del canale principale, per confrontare la
 // decisione prodotta da payload vecchio e nuovo sugli stessi dati.
+// ---------------------------------------------------------------------------
+// SCENARIO DI REAZIONE A UNA NOTIZIA
+//
+// Cosa NON fa: non prova a indovinare il numero che uscira'. Il consenso e'
+// gia' pubblico e gia' nel prezzo, e un modello linguistico che legge titoli
+// non ha nessun vantaggio informativo su un dato non ancora calcolato. Se
+// glielo si chiedesse comunque, risponderebbe in modo articolato e
+// convincente con zero potere predittivo -- che e' il modo peggiore di
+// sbagliare.
+//
+// Cosa fa: prepara la REAZIONE. Non "cosa esce" ma "se esce cosi', allora".
+// E' ragionamento su relazioni note (dato forte -> dollaro forte -> oro giu'),
+// non previsione. Serve a sapere in due secondi quale dei due ordini pendenti
+// tenere quando il dato esce, invece di deciderlo nel panico.
+// ---------------------------------------------------------------------------
+
+const SCENARIO_PROMPT = `Sei un analista macro specializzato su XAUUSD (oro). Ricevi un evento economico IMMINENTE, il contesto di mercato attuale e le notizie recenti.
+
+NON devi prevedere il valore che uscira'. Il consenso e' gia' noto e gia' prezzato: una previsione sul numero non ha valore. Se ti viene la tentazione di dire "probabilmente uscira' sopra le attese", fermati: non e' il tuo compito.
+
+Devi produrre una MAPPA DI REAZIONE: tre rami condizionali con soglie numeriche esplicite, basati sulla relazione fra il dato, il dollaro e l'oro.
+
+Considera:
+- la direzione della relazione (dato USA forte -> dollaro forte -> oro debole, e viceversa)
+- il posizionamento attuale: se l'oro e' gia' salito molto nelle ultime ore, una sorpresa nella stessa direzione ha meno spazio
+- le notizie recenti: un contesto geopolitico o dichiarazioni politiche possono attenuare o amplificare la reazione al dato, e in certi casi dominarla del tutto
+- il livello del dollar index e dei rendimenti a 10 anni forniti nel contesto
+
+Rispondi SOLO con questo JSON, senza testo attorno:
+{
+  "evento": "nome dell'evento",
+  "consenso": "valore atteso, come stringa",
+  "ramo_sopra": { "soglia": "es. sopra 56.5", "direzione_oro": "ribassista|rialzista", "forza": "debole|media|forte", "cosa_fare": "una frase operativa" },
+  "ramo_sotto": { "soglia": "es. sotto 54.0", "direzione_oro": "ribassista|rialzista", "forza": "debole|media|forte", "cosa_fare": "una frase operativa" },
+  "ramo_in_linea": { "soglia": "es. fra 54.0 e 56.5", "direzione_oro": "nessuna", "forza": "debole", "cosa_fare": "una frase operativa" },
+  "avvertenza": "il rischio principale di questa lettura, una frase",
+  "confidenza_mappa": 0-100
+}
+
+"confidenza_mappa" NON e' la confidenza su cosa uscira': e' quanto ti fidi che la RELAZIONE dato->oro tenga in questo contesto specifico. Se ci sono notizie che possono dominare il dato (tensioni geopolitiche, dichiarazioni sulla politica monetaria, dazi), abbassala e dillo nell'avvertenza.`;
+
+export async function generaScenarioNotizia({
+  evento,
+  marketSnapshot,
+  news,
+}: {
+  evento: { title: string; country: string; impact: string; time: string };
+  marketSnapshot: MarketSnapshot;
+  news: unknown;
+}) {
+  const payload = {
+    evento,
+    contesto: {
+      xauusd: marketSnapshot.xauusd,
+      variazione_pct: marketSnapshot.xauusdChangePct ?? null,
+      dxy: marketSnapshot.dxy ?? null,
+      dxy_variazione_pct: marketSnapshot.dxyChangePct ?? null,
+      us10y: marketSnapshot.us10y ?? null,
+      us10y_variazione_pct: marketSnapshot.us10yChangePct ?? null,
+      atr_15m: marketSnapshot.atr15m ?? null,
+      bias_d1: marketSnapshot.biasD1 ?? null,
+      bias_h4: marketSnapshot.biasH4 ?? null,
+      liquidita_24h: marketSnapshot.liquidita24h ?? null,
+    },
+    notizie_recenti: news,
+  };
+  const content = await callOpenAI(SCENARIO_PROMPT, payload);
+  return JSON.parse(content);
+}
+
 export async function generateSignalDaPayload(userPayload: unknown) {
   const content = await callOpenAI(SYSTEM_PROMPT, userPayload);
   return JSON.parse(content);

@@ -5,6 +5,7 @@ import { GenerateSignalButton } from "@/components/generate-signal-button";
 import { AiPauseToggle } from "@/components/ai-pause-toggle";
 import { SignalHistory } from "@/components/signal-history";
 import { MacroContext } from "@/components/macro-context";
+import { MarketHoursCompact } from "@/components/market-hours-compact";
 import { ContextFeed } from "@/components/context-feed";
 import { PerformanceStatsPanel } from "@/components/performance-stats";
 import { SIGNAL_HISTORY as DEMO_HISTORY } from "@/lib/mock-data";
@@ -17,6 +18,7 @@ import {
   getLatestSignal,
 } from "@/lib/server/db";
 import { SignalWatcher } from "@/components/signal-watcher";
+import { getMarketCalendarContext } from "@/lib/server/marketCalendar";
 
 export const dynamic = "force-dynamic";
 
@@ -104,6 +106,9 @@ export default async function Home() {
     status: dbError ? "error" : !isStale && marketSnapshot?.us10y !== null && marketSnapshot?.us10y !== undefined ? "live" : "disconnected",
   };
 
+  // Stato dei mercati calcolato server-side, come tutto il resto della pagina.
+  const marketCalendar = getMarketCalendarContext();
+
   const news = contextSnapshot?.news ?? [];
   const calendar = contextSnapshot?.calendar ?? [];
 
@@ -134,8 +139,13 @@ export default async function Home() {
           <div className="space-y-5">
             <AiPauseToggle />
             <GenerateSignalButton />
-            <SignalPanel signal={currentSignal} />
+            <SignalPanel
+              signal={currentSignal}
+              prezzoCorrente={xauQuote.price}
+              atr={marketSnapshot?.raw?.atr15m !== undefined && marketSnapshot?.raw?.atr15m !== null ? Number(marketSnapshot.raw.atr15m) : null}
+            />
             <MacroContext dxy={dxyQuote} us10y={us10yQuote} />
+            <MarketHoursCompact mercati={marketCalendar} />
             <ContextFeed events={calendar} news={news} />
             <PerformanceStatsPanel stats={performanceStats} />
           </div>

@@ -109,3 +109,73 @@ export async function getEconomicCalendar(): Promise<EconomicEvent[]> {
   merged.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
   return merged.slice(0, 25);
 }
+
+// ---------------------------------------------------------------------------
+// FINESTRA NOTIZIE
+//
+// Il calendario economico arrivava gia' fin qui e finiva nel payload dell'AI,
+// ma l'unico punto in cui influiva su una decisione era shouldCallAI (il gate
+// Asia, oggi disattivato). In pratica: l'agente SAPEVA dell'ISM delle 16:00 e
+// poteva generare un segnale lo stesso.
+//
+// Nei minuti intorno a un dato ad alto impatto il grafico non e' leggibile con
+// la logica ICT: la candela ampia col corpo pieno non e' un displacement su
+// liquidita', e' la reazione al dato, e i primi minuti sono tipicamente uno
+// stop hunt in entrambe le direzioni. Qui si calcola solo se siamo dentro
+// quella finestra; a fermare la generazione ci pensa runAnalysis.
+// ---------------------------------------------------------------------------
+
+// Ampiezza del silenzio per livello di impatto, in minuti. Prima dell'evento
+// serve a non aprire posizioni che il dato spazzera' via; dopo, a non
+// inseguire il primo movimento, che spesso viene ritracciato per intero.
+const FINESTRA_MINUTI = {
+  high: { prima: 30, dopo: 15 },
+  medium: { prima: 10, dopo: 10 },
+} as const;
+
+export interface FinestraNotizie {
+  attiva: boolean;
+  evento: EconomicEvent | null;
+  /** Minuti all'uscita: negativo se il dato e' gia' stato pubblicato. */
+  minutiAllEvento: number | null;
+  motivo: string | null;
+}
+
+export function finestraNotizie(
+  eventi: EconomicEvent[],
+  adesso: number = Date.now()
+): FinestraNotizie {
+  const spento: FinestraNotizie = {
+    attiva: false,
+    evento: null,
+    minutiAllEvento: null,
+    motivo: null,
+  };
+  if (!Array.isArray(eventi) || eventi.length === 0) return spento;
+
+  // Gli eventi arrivano gia' filtrati su USD/EUR e impatto high/medium da
+  // getEconomicCalendar: qui si guarda solo la distanza temporale.
+  for (const e of eventi) {
+    const ts = new Date(e.time).getTime();
+    if (!Number.isFinite(ts)) continue;
+
+    const ampiezza =
+      e.impact === "high" ? FINESTRA_MINUTI.high : e.impact === "medium" ? FINESTRA_MINUTI.medium : null;
+    if (!ampiezza) continue;
+
+    const minuti = Math.round((ts - adesso) / 60000);
+    if (minuti <= ampiezza.prima && minuti >= -ampiezza.dopo) {
+      return {
+        attiva: true,
+        evento: e,
+        minutiAllEvento: minuti,
+        motivo:
+          minuti >= 0
+            ? `${e.title} (${e.country}, impatto ${e.impact}) fra ${minuti} minuti`
+            : `${e.title} (${e.country}, impatto ${e.impact}) pubblicato ${Math.abs(minuti)} minuti fa`,
+      };
+    }
+  }
+
+  return spento;
+}

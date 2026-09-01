@@ -76,8 +76,8 @@ export function shouldCallAI(
 // ogni ciclo cron (ogni 5 minuti) anche quando sul grafico non stava succedendo
 // nulla di interessante. Questo filtro gira in locale, a costo zero, e lascia
 // passare la chiamata all'AI solo se rileva almeno `sogliaSegnali` elementi
-// tecnici rilevanti: BOS/CHoCH (H1 o M5), displacement (impulso >= 1 ATR con
-// rigetto su 5m o 30m), oppure la rottura della liquidita' delle ultime 24h.
+// tecnici rilevanti: BOS/CHoCH (M15 o M5), displacement (impulso >= 1 ATR con
+// rigetto su 5m, 15m o 30m), oppure la rottura della liquidita' delle ultime 24h.
 //
 // NON cambia la strategia: quando il filtro blocca, il ciclo viene comunque
 // registrato come NO_TRADE con la spiegazione, esattamente come gli altri cicli.
@@ -87,9 +87,12 @@ export function shouldCallAI(
 const DISPLACEMENT_MIN_ATR = 1;
 
 export interface TechnicalSetupInput {
-  ictStrutturaH1: StructureResult;
+  // Timeframe guida della terna operativa M30/M15/M5. Era H1, che non e' piu'
+  // un timeframe di analisi: le candele orarie servono solo a liquidita_24h.
+  ictStrutturaM15: StructureResult;
   ictStrutturaM5: StructureResult;
   rigetto5m: RejectionSignal;
+  rigetto15m: RejectionSignal;
   rigetto30m: RejectionSignal;
   liquidita24h: { massimo: number; minimo: number } | null;
 }
@@ -130,9 +133,9 @@ export function hasTechnicalSetup(
     segnali.push(`${e.tipo.toUpperCase()} ${e.timeframe} ${e.direzione} a ${Number(e.livello).toFixed(2)} (ancora attivo)`);
   }
 
-  const eventoH1 = snapshot.ictStrutturaH1?.evento ?? null;
-  if (eventoH1) {
-    segnali.push(`${eventoH1} su H1 (${snapshot.ictStrutturaH1.direzioneEvento ?? "direzione n/d"})`);
+  const eventoM15 = snapshot.ictStrutturaM15?.evento ?? null;
+  if (eventoM15) {
+    segnali.push(`${eventoM15} su M15 (${snapshot.ictStrutturaM15.direzioneEvento ?? "direzione n/d"})`);
   }
 
   const eventoM5 = snapshot.ictStrutturaM5?.evento ?? null;
@@ -142,6 +145,10 @@ export function hasTechnicalSetup(
 
   if (isDisplacement(snapshot.rigetto5m)) {
     segnali.push(`displacement 5m (impulso ${snapshot.rigetto5m.ampiezzaImpulsoInAtr?.toFixed(2)} ATR)`);
+  }
+
+  if (isDisplacement(snapshot.rigetto15m)) {
+    segnali.push(`displacement 15m (impulso ${snapshot.rigetto15m.ampiezzaImpulsoInAtr?.toFixed(2)} ATR)`);
   }
 
   if (isDisplacement(snapshot.rigetto30m)) {

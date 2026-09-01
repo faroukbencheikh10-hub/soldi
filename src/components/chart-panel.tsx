@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 
+// La terna operativa e' M5 / M15 / M30: il grafico mostra gli stessi
+// timeframe su cui l'agente rileva gli eventi.
 const TIMEFRAMES = [
   { label: "5m", value: "5" },
   { label: "15m", value: "15" },
-  { label: "1h", value: "60" },
+  { label: "30m", value: "30" },
 ];
 
 export function ChartPanel() {

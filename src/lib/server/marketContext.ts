@@ -56,8 +56,8 @@ export interface ContestoTimeframe {
 export interface ContestoMercato {
   prezzo: number;
   aggiornatoIl: string;
-  h1: ContestoTimeframe;
   m30: ContestoTimeframe;
+  m15: ContestoTimeframe;
   m5: ContestoTimeframe;
   liquidita24h: { massimo: number; minimo: number; posizionePct: number | null } | null;
   eventiInvalidati: { tipo: string; timeframe: string; direzione: string; motivo: string }[];
@@ -208,12 +208,12 @@ function contestoTimeframe(
 export interface IngressoContesto {
   prezzo: number;
   candles: Record<string, Candela[] | undefined>;
-  atr1h: number | null;
   atr30m: number | null;
+  atr15m: number | null;
   atr5m: number | null;
   liquidita24h: { massimo: number; minimo: number } | null;
-  zoneH1: { orderBlocks: OrderBlock[]; fvg: FVG[]; livelliUguali: LivelliUguali | null };
   zoneM30: { orderBlocks: OrderBlock[]; fvg: FVG[]; livelliUguali: LivelliUguali | null };
+  zoneM15: { orderBlocks: OrderBlock[]; fvg: FVG[]; livelliUguali: LivelliUguali | null };
   zoneM5: { orderBlocks: OrderBlock[]; fvg: FVG[]; livelliUguali: LivelliUguali | null };
 }
 
@@ -233,8 +233,8 @@ export function costruisciContesto(
   return {
     prezzo: input.prezzo,
     aggiornatoIl: new Date().toISOString(),
-    h1: contestoTimeframe("H1", input.candles["1h"], input.atr1h, per("H1"), input.zoneH1),
     m30: contestoTimeframe("M30", input.candles["30m"], input.atr30m, per("M30"), input.zoneM30),
+    m15: contestoTimeframe("M15", input.candles["15m"], input.atr15m, per("M15"), input.zoneM15),
     m5: contestoTimeframe("M5", input.candles["5m"], input.atr5m, per("M5"), input.zoneM5),
     liquidita24h: liq ? { ...liq, posizionePct } : null,
     eventiInvalidati,
@@ -287,8 +287,8 @@ export interface TimeframeCompresso {
 export interface ContestoCompresso {
   prezzo: number;
   aggiornatoIl: string;
-  h1: TimeframeCompresso;
   m30: TimeframeCompresso;
+  m15: TimeframeCompresso;
   m5: TimeframeCompresso;
   liquidita24h: { massimo: number; minimo: number; posizionePct: number | null } | null;
   eventiInvalidati: { tipo: string; timeframe: string; direzione: string; motivo: string }[];
@@ -316,8 +316,8 @@ export function comprimiContesto(ctx: ContestoMercato): ContestoCompresso {
   return {
     prezzo: ctx.prezzo,
     aggiornatoIl: ctx.aggiornatoIl,
-    h1: comprimiTimeframe(ctx.h1, ctx.prezzo),
     m30: comprimiTimeframe(ctx.m30, ctx.prezzo),
+    m15: comprimiTimeframe(ctx.m15, ctx.prezzo),
     m5: comprimiTimeframe(ctx.m5, ctx.prezzo),
     liquidita24h: ctx.liquidita24h,
     eventiInvalidati: ctx.eventiInvalidati,
@@ -333,10 +333,10 @@ export function firmaContesto(ctx: ContestoMercato): string {
     const amp = tf.ampiezzaRecenteInAtr === null ? "na" : String(Math.round(tf.ampiezzaRecenteInAtr * 2) / 2);
     return `${tf.timeframe}:${tf.regime}:${tf.fase}:${tf.momentum.direzione}:${amp}`;
   };
-  const eventi = [...ctx.h1.eventiAttiviIds, ...ctx.m30.eventiAttiviIds, ...ctx.m5.eventiAttiviIds]
+  const eventi = [...ctx.m30.eventiAttiviIds, ...ctx.m15.eventiAttiviIds, ...ctx.m5.eventiAttiviIds]
     .sort()
     .join(",");
-  return `${perTf(ctx.h1)}|${perTf(ctx.m30)}|${perTf(ctx.m5)}#eventi=${eventi}`;
+  return `${perTf(ctx.m30)}|${perTf(ctx.m15)}|${perTf(ctx.m5)}#eventi=${eventi}`;
 }
 
 export interface Transizione {
@@ -356,8 +356,8 @@ export function calcolaTransizione(
   }
 
   const coppie: [string, TimeframeCompresso, ContestoTimeframe][] = [
-    ["h1", precedente.h1, corrente.h1],
     ["m30", precedente.m30, corrente.m30],
+    ["m15", precedente.m15, corrente.m15],
     ["m5", precedente.m5, corrente.m5],
   ];
 
@@ -370,13 +370,13 @@ export function calcolaTransizione(
   }
 
   const idsPrima = new Set([
-    ...(precedente.h1?.eventiAttiviIds ?? []),
     ...(precedente.m30?.eventiAttiviIds ?? []),
+    ...(precedente.m15?.eventiAttiviIds ?? []),
     ...(precedente.m5?.eventiAttiviIds ?? []),
   ]);
   const idsDopo = new Set([
-    ...corrente.h1.eventiAttiviIds,
     ...corrente.m30.eventiAttiviIds,
+    ...corrente.m15.eventiAttiviIds,
     ...corrente.m5.eventiAttiviIds,
   ]);
 
