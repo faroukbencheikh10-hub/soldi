@@ -43,6 +43,7 @@ import {
   comprimiContesto,
   firmaContesto,
   calcolaTransizione,
+  rilevaRangeAccumulo,
   type EventoContesto,
   type ContestoCompresso,
 } from "@/lib/server/marketContext";
@@ -331,18 +332,54 @@ async function avvisaNotizia(
   return true;
 }
 
-// NOTIFICHE A META' TRADE — RIMOSSE (02/09)
+// Avviso di GESTIONE a +1R.
 //
-// Qui c'era avvisaParziale: un push a +1R che, su un trade gia' aperto,
-// suggeriva di chiudere meta' posizione e portare lo stop a pareggio.
-// Rimosso su richiesta: nessuna notifica deve piu' arrivare a trade in
-// corso, e nessun segnale deve poter notificare due volte.
+// Sui dati reali il TP1 arriva in media dopo 1h40, ma con una coda lunga: dei
+// venti trade che l'hanno raggiunto, otto entro un'ora, tredici entro due,
+// venti entro quattro. Chiudere a mano dopo un'ora taglia piu' della meta'
+// dei vincitori -- ed e' esattamente quello che succedeva, perche' l'attesa
+// avveniva a rischio pieno.
 //
-// Restano solo due notifiche, entrambe una tantum: il NUOVO SEGNALE e
-// l'avviso di notizia macro imminente.
+// Portare lo stop a pareggio dopo un parziale rende l'attesa gratuita: da li'
+// in poi il trade non puo' piu' perdere, e le ore successive non costano
+// niente. L'esecuzione e' manuale (l'app non manda ordini al broker): questo
+// e' solo l'avviso che il livello e' stato raggiunto.
 //
-// La gestione del trade avviene comunque a mano sul broker: l'app resta un
-// generatore di segnali, non un gestore di posizioni.
+// Parte una volta sola per segnale. Non serve nessuna guardia sull'ingresso:
+// arrivare a +1R implica che il prezzo ha gia' superato l'entry.
+const SOGLIA_PARZIALE_R = 1;
+
+async function avvisaParziale(
+  segnale: { id: string | number; direction: string; entry: unknown; stop_loss: unknown; tp1: unknown },
+  prezzo: number | null
+): Promise<boolean> {
+  if (prezzo === null || !Number.isFinite(prezzo)) return false;
+  if (segnale.direction !== "BUY" && segnale.direction !== "SELL") return false;
+
+  const entry = Number(segnale.entry);
+  const stopLoss = Number(segnale.stop_loss);
+  const rischio = Math.abs(entry - stopLoss);
+  if (!Number.isFinite(entry) || !Number.isFinite(stopLoss) || rischio <= 0) return false;
+
+  const guadagnoR =
+    (segnale.direction === "BUY" ? prezzo - entry : entry - prezzo) / rischio;
+  if (guadagnoR < SOGLIA_PARZIALE_R) return false;
+
+  const gia = await getSetting("parziale_avvisato_signal_id");
+  if (gia === String(segnale.id)) return false;
+  await setSetting("parziale_avvisato_signal_id", String(segnale.id));
+
+  sendPushToAll({
+    title: `+${guadagnoR.toFixed(1)}R · chiudi meta' e stop a pareggio`,
+    body: `${segnale.direction} da ${entry.toFixed(2)}, prezzo ${prezzo.toFixed(2)}. Sposta lo stop a ${entry.toFixed(
+      2
+    )}: da qui in poi il trade non puo' piu' perdere. TP1 ${Number(segnale.tp1).toFixed(2)}.`,
+    url: "/",
+    tag: "parziale-1r",
+  }).catch((err) => console.error("[runAnalysis] avviso parziale fallito:", err));
+
+  return true;
+}
 
 export async function runAnalysis(options?: { force?: boolean }) {
   const force = options?.force ?? false;
@@ -402,8 +439,10 @@ export async function runAnalysis(options?: { force?: boolean }) {
       const resultR = naturalOutcome === "WIN" && risk > 0 ? Math.abs(tp1 - entry) / risk : -1;
       await closeSignal(latest.id, naturalOutcome, resultR);
     } else {
-      // Il prezzo non ha ancora toccato ne' stop ne' target: nessuna
-      // notifica parte a trade aperto, si continua solo a misurare.
+      // Il prezzo non ha ancora toccato ne' stop ne' target: e' esattamente
+      // la finestra in cui puo' arrivare sulla zona di ingresso. Il controllo
+      // gira a ogni ciclo, quindi l'avviso parte al primo passaggio utile.
+      await avvisaParziale(latest, currentPrice);
 
       const ageMs = Date.now() - new Date(latest.created_at).getTime();
       expired = ageMs > SIGNAL_TIMEOUT_MS;
@@ -786,8 +825,21 @@ export async function runAnalysis(options?: { force?: boolean }) {
   // Filtro tecnico locale: se non c'e' nulla di interessante sul grafico non
   // chiamiamo l'AI (risparmio credito). La generazione manuale (force) passa
   // sempre, e il ciclo viene comunque registrato come NO_TRADE con la ragione.
+  // Zona di accumulo sul 5 minuti: il prezzo chiuso da due ore in una fascia
+  // stretta rispetto all'ATR. Le rotture strutturali su M30/M15 spengono il
+  // filtro, perche' dicono che la fascia si sta gia' aprendo.
+  const rangeAccumulo = rilevaRangeAccumulo(
+    marketSnapshot.xauusd,
+    marketSnapshot.candles?.["5m"] as { high: unknown; low: unknown }[] | undefined,
+    marketSnapshot.atr5m ?? null,
+    [
+      { timeframe: "M30", evento: marketSnapshot.ictStrutturaM30?.evento ?? null },
+      { timeframe: "M15", evento: marketSnapshot.ictStrutturaM15?.evento ?? null },
+    ]
+  );
+
   const setupTecnico = hasTechnicalSetup(
-    marketSnapshot,
+    { ...marketSnapshot, rangeAccumulo },
     marketSnapshot.xauusd,
     SOGLIA_SETUP_ORO,
     eventiAttivi

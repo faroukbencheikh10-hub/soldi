@@ -68,31 +68,44 @@ const CANDELE_EVENTO_RECENTE = 4;
 const COMPRESSIONE_MAX_ATR = 1.2;
 
 // ---------------------------------------------------------------------------
-// RANGE DI ACCUMULO (senso ICT, non compressione di volatilita')
+// ZONA DI ACCUMULO SU M5
 //
-// Un accumulo non e' "il prezzo si muove poco": e' il prezzo intrappolato fra
-// DUE pool di liquidita' (massimi uguali sopra, minimi uguali sotto) che non
-// sono ancora stati rotti. Dentro quella fascia il movimento e' rumore: si
-// paga spread e slippage senza direzione.
+// Cos'e': il prezzo chiuso in una fascia stretta sul grafico a 5 minuti per
+// un paio d'ore. E' il caso concreto che si voleva evitare -- una scatola di
+// una quindicina di dollari in cui il prezzo oscilla senza direzione, dove i
+// segnali nascono e muoiono contro il bordo opposto.
 //
-// Il filtro e' deliberatamente PERMISSIVO, per non uccidere i trade buoni:
-//  - blocca SOLO il cuore del range (fra il 35% e il 65% dell'ampiezza).
-//    Sui bordi non blocca nulla, perche' lo sweep del minimo o del massimo
-//    del range E' il setup ICT buono -- e' li' che si prende l'uscita;
-//  - si disattiva da solo appena il range viene rotto: un BOS/CHoCH o un
-//    displacement significativo su QUALSIASI timeframe operativo (M30, M15
-//    o M5) tolgono immediatamente il blocco, cosi' il momento dell'uscita
-//    viene colto invece che perso.
+// Perche' su M5 e non su M30: una zona del genere dura due ore, cioe' appena
+// quattro candele M30. Su quel timeframe e' invisibile. Sui dati misurati, i
+// range M30 avevano un'ampiezza mediana di 4.24 ATR -- la normale operativita',
+// non un accumulo -- e nessuna taratura su M30 riusciva a intercettarla.
+//
+// COME FUNZIONA
+// Si prendono le ultime CANDELE_BOX_M5 candele M5 chiuse (2 ore) e si misura
+// la fascia massimo-minimo. Se sta dentro AMPIEZZA_MAX_ATR volte l'ATR a 5
+// minuti ed il prezzo e' dentro quella fascia, si blocca -- ovunque nel range,
+// non solo al centro. E' una scelta deliberatamente severa: meglio meno trade
+// che entrare in una zona di accumulo.
+//
+// LIMITE DA CONOSCERE, misurato sui dati reali del 02/09
+// Una zona di accumulo diventa riconoscibile solo quando e' gia' iniziata da
+// un pezzo: la fascia si stringe DOPO che il prezzo ha smesso di spingere.
+// Sulla scatola 4315-4330 di quella mattina il filtro sarebbe scattato dalle
+// 09:31, mentre il segnale poi perdente era uscito alle 09:20 -- quando le due
+// ore precedenti mostravano ancora un range largo, perche' il prezzo veniva da
+// un'ora di salita. Questo filtro quindi protegge dalla seconda meta' di una
+// zona di accumulo, non dalla prima. Nessun filtro su candele chiuse puo' fare
+// meglio: prima che la compressione esista, non c'e' niente da misurare.
 // ---------------------------------------------------------------------------
 
-// Fascia centrale del range considerata "morta". Piu' e' stretta, meno trade
-// vengono bloccati: 0.35-0.65 blocca circa un terzo centrale dell'ampiezza.
-const ZONA_MORTA_MIN = 0.35;
-const ZONA_MORTA_MAX = 0.65;
+// Due ore di candele a 5 minuti.
+const CANDELE_BOX_M5 = 24;
 
-// Ampiezza minima dell'impulso (in ATR) oltre la quale si considera che il
-// range sia in fase di rottura: il filtro si spegne.
-const ROTTURA_MIN_ATR = 1;
+// Quanto stretta deve essere la fascia rispetto all'ATR a 5 minuti perche'
+// sia accumulo e non normale movimento. 3.5 e' la taratura severa: sui dati
+// del 02/09 blocca circa un ciclo su sei. Alzarlo blocca di piu' (a 4.0 si
+// arriva al 64% dei cicli), abbassarlo blocca solo le compressioni estreme.
+const AMPIEZZA_MAX_ATR_M5 = 3.5;
 
 export interface RangeAccumulo {
   attivo: boolean;
@@ -102,7 +115,7 @@ export interface RangeAccumulo {
   posizionePct: number | null;
 }
 
-/** Una rottura vista su un qualsiasi timeframe operativo spegne il filtro. */
+/** Una rottura vista su un timeframe operativo: spegne il filtro. */
 export interface RotturaTimeframe {
   timeframe: string;
   evento?: string | null;
@@ -111,7 +124,8 @@ export interface RotturaTimeframe {
 
 export function rilevaRangeAccumulo(
   prezzo: number,
-  livelliUguali: LivelliUguali | null | undefined,
+  candele5m: { high: unknown; low: unknown }[] | null | undefined,
+  atr5m: number | null | undefined,
   rotture: RotturaTimeframe[] = []
 ): RangeAccumulo {
   const inattivo = (motivo: string): RangeAccumulo => ({
@@ -123,43 +137,42 @@ export function rilevaRangeAccumulo(
   });
 
   if (!Number.isFinite(prezzo)) return inattivo("prezzo non valido");
+  if (!atr5m || !(atr5m > 0)) return inattivo("ATR 5m non disponibile");
 
-  // Il range e' gia' rotto: nessun blocco, e' esattamente il momento in cui
-  // si vuole che l'analisi giri. Vale su M30, M15 e M5 indifferentemente: il
-  // timeframe piu' veloce se ne accorge per primo ed e' quello che fa
-  // entrare in tempo invece che a movimento gia' fatto.
+  // Una rottura confermata dice che la fascia si sta gia' aprendo: e'
+  // esattamente il momento in cui si vuole che l'analisi giri.
   for (const r of rotture) {
     if (r.evento === "BOS" || r.evento === "CHoCH") {
       return inattivo(`struttura ${r.timeframe} in rottura (${r.evento}): nessun blocco`);
     }
-    if (typeof r.displacementInAtr === "number" && r.displacementInAtr >= ROTTURA_MIN_ATR) {
-      return inattivo(
-        `displacement ${r.timeframe} ${r.displacementInAtr.toFixed(2)} ATR in corso: nessun blocco`
-      );
-    }
   }
 
-  const sopra = (livelliUguali?.massimiUguali ?? []).filter((v) => Number.isFinite(v) && v > prezzo);
-  const sotto = (livelliUguali?.minimiUguali ?? []).filter((v) => Number.isFinite(v) && v < prezzo);
+  // Indice 0 = candela ancora in formazione, esclusa come ovunque nel codice.
+  const c = (candele5m ?? [])
+    .slice(1, 1 + CANDELE_BOX_M5)
+    .map((x) => ({ h: Number(x.high), l: Number(x.low) }))
+    .filter((x) => Number.isFinite(x.h) && Number.isFinite(x.l));
 
-  // Servono pool su ENTRAMBI i lati: e' questo che distingue un accumulo da
-  // una semplice pausa dentro un trend.
-  if (sopra.length === 0 || sotto.length === 0) {
-    return inattivo("nessun range di accumulo (manca un pool di liquidita' su almeno un lato)");
-  }
+  if (c.length < CANDELE_BOX_M5) return inattivo("candele M5 insufficienti per misurare la fascia");
 
-  const alto = Math.min(...sopra);
-  const basso = Math.max(...sotto);
+  const alto = Math.max(...c.map((x) => x.h));
+  const basso = Math.min(...c.map((x) => x.l));
   const ampiezza = alto - basso;
-  if (!(ampiezza > 0)) return inattivo("range degenere");
+  if (!(ampiezza > 0)) return inattivo("fascia degenere");
 
-  const posizione = (prezzo - basso) / ampiezza;
-  const posizionePct = Number((posizione * 100).toFixed(1));
+  const ampiezzaInAtr = ampiezza / atr5m;
+  if (ampiezzaInAtr > AMPIEZZA_MAX_ATR_M5) {
+    return inattivo(
+      `nessuna zona di accumulo: fascia M5 di 2h ampia ${ampiezzaInAtr.toFixed(2)} ATR, il prezzo si sta muovendo`
+    );
+  }
 
-  if (posizione < ZONA_MORTA_MIN || posizione > ZONA_MORTA_MAX) {
+  const posizionePct = Number((((prezzo - basso) / ampiezza) * 100).toFixed(1));
+
+  if (prezzo < basso || prezzo > alto) {
     return {
       attivo: false,
-      motivo: `dentro un range ${basso.toFixed(2)}-${alto.toFixed(2)} ma vicino a un bordo (${posizionePct}%): setup di uscita possibile, nessun blocco`,
+      motivo: `fascia M5 stretta ${basso.toFixed(2)}-${alto.toFixed(2)} ma il prezzo ne e' gia' uscito: nessun blocco`,
       alto,
       basso,
       posizionePct,
@@ -168,7 +181,7 @@ export function rilevaRangeAccumulo(
 
   return {
     attivo: true,
-    motivo: `range di accumulo ${basso.toFixed(2)}-${alto.toFixed(2)} con liquidita' su entrambi i lati, prezzo al centro (${posizionePct}%) e nessuna rottura in corso: zona di rumore, si aspetta la rottura`,
+    motivo: `zona di accumulo M5: il prezzo e' chiuso da 2 ore nella fascia ${basso.toFixed(2)}-${alto.toFixed(2)} (ampia ${ampiezzaInAtr.toFixed(2)} ATR, posizione ${posizionePct}%). Trade evitato per scelta: dentro una zona cosi' i segnali nascono e muoiono contro il bordo opposto`,
     alto,
     basso,
     posizionePct,
