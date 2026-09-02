@@ -544,8 +544,10 @@ export async function runAnalysis(options?: { force?: boolean }) {
   // Nessuna AI qui dentro: si aggiorna solo la memoria degli eventi tecnici.
 
   // 1) nuovi eventi sulle candele CHIUSE, registrati una volta sola
+  // M30 non e' piu' un timeframe di analisi (impianto H4/H1 -> M15 -> M5):
+  // i suoi eventi non vengono piu' generati. Le righe M30 gia' in tabella
+  // restano leggibili e si estinguono per scadenza, come gia' avviene per H1.
   const eventiRilevati = [
-    ...rilevaEventi(marketSnapshot.candles["30m"], marketSnapshot.atr30m, "M30"),
     ...rilevaEventi(marketSnapshot.candles["15m"], marketSnapshot.atr15m, "M15"),
     ...rilevaEventi(marketSnapshot.candles["5m"], marketSnapshot.atr5m, "M5"),
   ];
@@ -664,7 +666,7 @@ export async function runAnalysis(options?: { force?: boolean }) {
   // controllo "il prezzo e' dentro?": la fingerprint deve poter distinguere
   // "dentro l'Order Block M30 ribassista 2375-2371" da "dentro la FVG M15
   // rialzista 2360-2358", non solo sapere che e' "dentro una zona qualsiasi".
-  // Copre M30, M15 e M5.
+  // Copre M15 e M5 (M30 non guida piu' il setup).
   const tagZone = (
     timeframe: Timeframe,
     tipo: "orderBlock" | "fvg",
@@ -681,15 +683,16 @@ export async function runAnalysis(options?: { force?: boolean }) {
   const zoneOccupate = zoneOccupateDalPrezzo(marketSnapshot.xauusd, [
     tagZone("M15", "orderBlock", marketSnapshot.ictOrderBlocksM15),
     tagZone("M15", "fvg", marketSnapshot.ictFvgM15),
-    tagZone("M30", "orderBlock", marketSnapshot.ictOrderBlocksM30),
-    tagZone("M30", "fvg", marketSnapshot.ictFvgM30),
     tagZone("M5", "orderBlock", marketSnapshot.ictOrderBlocksM5),
     tagZone("M5", "fvg", marketSnapshot.ictFvgM5),
   ]);
+  // ATR di riferimento: M15, il timeframe di setup. Era atr30m, rimasto da
+  // quando M30 guidava: l'impronta decide se chiamare l'AI, quindi la scala
+  // con cui misura le distanze deve essere quella del timeframe che conta.
   const impronta = calcolaFingerprint(
     eventiAttivi,
     marketSnapshot.xauusd,
-    marketSnapshot.atr30m,
+    marketSnapshot.atr15m,
     zoneOccupate
   );
   const improntaPrecedente = await getSetting("setup_fingerprint");
@@ -822,22 +825,23 @@ export async function runAnalysis(options?: { force?: boolean }) {
   await preparaScenario(calendar, marketSnapshot, news, adesso);
   await avvisaNotizia(calendar, marketSnapshot, adesso);
 
-  // Filtro tecnico locale: se non c'e' nulla di interessante sul grafico non
-  // chiamiamo l'AI (risparmio credito). La generazione manuale (force) passa
-  // sempre, e il ciclo viene comunque registrato come NO_TRADE con la ragione.
   // Zona di accumulo sul 5 minuti: il prezzo chiuso da due ore in una fascia
-  // stretta rispetto all'ATR. Le rotture strutturali su M30/M15 spengono il
-  // filtro, perche' dicono che la fascia si sta gia' aprendo.
+  // stretta rispetto all'ATR. Le rotture strutturali sui timeframe che contano
+  // (H1 narrativa, M15 setup) spengono il filtro, perche' dicono che la fascia
+  // si sta gia' aprendo. M30 non compare piu': non e' un timeframe di analisi.
   const rangeAccumulo = rilevaRangeAccumulo(
     marketSnapshot.xauusd,
     marketSnapshot.candles?.["5m"] as { high: unknown; low: unknown }[] | undefined,
     marketSnapshot.atr5m ?? null,
     [
-      { timeframe: "M30", evento: marketSnapshot.ictStrutturaM30?.evento ?? null },
+      { timeframe: "H1", evento: marketSnapshot.ictStrutturaH1?.evento ?? null },
       { timeframe: "M15", evento: marketSnapshot.ictStrutturaM15?.evento ?? null },
     ]
   );
 
+  // Filtro tecnico locale: se non c'e' nulla di interessante sul grafico non
+  // chiamiamo l'AI (risparmio credito). La generazione manuale (force) passa
+  // sempre, e il ciclo viene comunque registrato come NO_TRADE con la ragione.
   const setupTecnico = hasTechnicalSetup(
     { ...marketSnapshot, rangeAccumulo },
     marketSnapshot.xauusd,
@@ -911,12 +915,43 @@ export async function runAnalysis(options?: { force?: boolean }) {
   if (signal.direction === "BUY" || signal.direction === "SELL") {
     const prezzoOra = marketSnapshot.xauusd;
     const entrySegnale = Number(signal.entry);
-    const eseguibile =
-      Number.isFinite(prezzoOra) && Number.isFinite(entrySegnale)
-        ? signal.direction === "BUY"
-          ? prezzoOra <= entrySegnale
-          : prezzoOra >= entrySegnale
-        : false;
+    const stopSegnale = Number(signal.stopLoss);
+    const tp1Segnale = Number(signal.tp1);
+
+    // Il prezzo deve aver raggiunto la zona, ma non deve averla ATTRAVERSATA
+    // fino a invalidare il trade. Il controllo era one-sided (solo
+    // "prezzo <= entry" per un BUY) e questo lasciava passare due casi
+    // assurdi, entrambi con conseguenze reali:
+    //
+    //  - prezzo GIA' OLTRE LO STOP: un BUY con entry 4300 e stop 4295 con il
+    //    prezzo a 4280 passava il controllo. Sarebbe arrivata la notifica di
+    //    un trade gia' perso in partenza, e il monitor l'avrebbe chiuso come
+    //    LOSS al primo ciclo.
+    //  - prezzo GIA' OLTRE IL TARGET: lo stesso BUY con il prezzo gia' sopra
+    //    TP1 sarebbe stato chiuso come WIN a pieno R senza che il trade sia
+    //    mai esistito, gonfiando le statistiche.
+    //
+    // Ora il prezzo deve stare nella finestra utile: dopo lo stop e prima del
+    // target, dal lato giusto dell'entry.
+    let eseguibile = false;
+    let motivoNonEseguibile = "";
+    if (!Number.isFinite(prezzoOra) || !Number.isFinite(entrySegnale)) {
+      motivoNonEseguibile = "prezzo o entry non validi";
+    } else if (signal.direction === "BUY" ? prezzoOra > entrySegnale : prezzoOra < entrySegnale) {
+      motivoNonEseguibile = "il prezzo non ha ancora raggiunto la zona: sarebbe un ordine pendente";
+    } else if (
+      Number.isFinite(stopSegnale) &&
+      (signal.direction === "BUY" ? prezzoOra <= stopSegnale : prezzoOra >= stopSegnale)
+    ) {
+      motivoNonEseguibile = `il prezzo ha gia' superato lo stop ${stopSegnale.toFixed(2)}: il trade nascerebbe gia' perso`;
+    } else if (
+      Number.isFinite(tp1Segnale) &&
+      (signal.direction === "BUY" ? prezzoOra >= tp1Segnale : prezzoOra <= tp1Segnale)
+    ) {
+      motivoNonEseguibile = `il prezzo ha gia' raggiunto il target ${tp1Segnale.toFixed(2)}: non resta niente da prendere`;
+    } else {
+      eseguibile = true;
+    }
 
     if (!eseguibile) {
       const distanza = Math.abs(entrySegnale - prezzoOra).toFixed(2);
@@ -934,7 +969,7 @@ export async function runAnalysis(options?: { force?: boolean }) {
         reasoning:
           `${rawSignal.reasoning ?? ""}\n\n[Scartato: il segnale ${signal.direction} aveva entry ` +
           `${entrySegnale.toFixed(2)} con prezzo ${Number(prezzoOra).toFixed(2)} (${distanza} di ` +
-          `distanza). Sarebbe stato un ordine pendente, non un trade eseguibile ora.]`,
+          `distanza) — ${motivoNonEseguibile}.]`,
       } as typeof rawSignal);
     }
   }
@@ -946,25 +981,25 @@ export async function runAnalysis(options?: { force?: boolean }) {
     // Notifica immediata alla nascita del segnale. Il testo dice comunque
     // quanto dista l'entry dal prezzo, cosi' si vede a colpo d'occhio se il
     // livello e' gia' buono o se e' un ordine da piazzare in attesa.
-    const ingresso = distanzaIngresso(
-      signal.direction,
-      Number(signal.entry),
-      marketSnapshot.xauusd,
-      marketSnapshot.atr15m ?? null
-    );
+    // Il TITOLO porta il PREZZO REALE di mercato, non l'entry.
+    //
+    // Entry e prezzo ormai quasi coincidono (un segnale nasce solo se il
+    // prezzo e' gia' nella finestra utile), ma non sono la stessa cosa:
+    // l'entry e' il livello scritto dall'AI, il prezzo e' quello a cui il
+    // mercato sta scambiando in questo istante. E' quest'ultimo il numero
+    // che serve per eseguire, quindi sta nel titolo -- la prima e spesso
+    // unica riga che si legge sul telefono.
+    const prezzoReale = Number.isFinite(marketSnapshot.xauusd)
+      ? marketSnapshot.xauusd.toFixed(2)
+      : "n/d";
 
-    // Il TITOLO deve dire subito se il trade e' eseguibile o e' un limite da
-    // piazzare. Prima diceva solo "Nuovo segnale: SELL": sul telefono si legge
-    // il titolo e si entra a mercato, ma l'entry e' il bordo di una zona di
-    // pullback e puo' stare parecchio lontano dal prezzo. Il 02/09 un SELL
-    // aveva entry 4312.20 con prezzo a 4302.68 -- quasi dieci dollari, contro
-    // uno stop di 10.80: entrare a mercato avrebbe significato partire con
-    // quasi tutto lo stop gia' bruciato.
     sendPushToAll({
-      title: `Nuovo segnale: ${signal.direction} · eseguibile ora`,
-      body: `${ingresso.testo} · SL ${Number(signal.stopLoss).toFixed(2)} · TP1 ${Number(
-        signal.tp1
-      ).toFixed(2)} · Conf ${signal.confidence}%`,
+      title: `${signal.direction} ORA a ${prezzoReale}`,
+      body: `Entry ${Number(signal.entry).toFixed(2)} · SL ${Number(signal.stopLoss).toFixed(
+        2
+      )} · TP1 ${Number(signal.tp1).toFixed(2)} · TP2 ${Number(signal.tp2).toFixed(
+        2
+      )} · Conf ${signal.confidence}%`,
       url: "/",
     }).catch((err) => console.error("[runAnalysis] invio push fallito:", err));
   }

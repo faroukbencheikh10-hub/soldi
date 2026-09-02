@@ -1,11 +1,22 @@
 import { getMacroContext } from "@/lib/server/macroData";
 import { computeATR } from "@/lib/server/atr";
+import {
+  calcolaLivelliApertura,
+  killZoneCorrente,
+  rilevaJudasSwing,
+  oteDaSwing,
+  type Ote,
+  type LivelliApertura,
+  type ContestoKillZone,
+  type JudasSwing,
+} from "@/lib/server/ictOriginale";
 import { computeLevels, type Levels } from "@/lib/server/levels";
 import { computeLevels5m, type Levels5m } from "@/lib/server/levels5m";
 import { computeLevels30m, type Levels30m } from "@/lib/server/levels30m";
 import { computeRejection, type RejectionSignal } from "@/lib/server/rejection";
 import {
   computeStructure,
+  computeSwings,
   computeOrderBlocks,
   computeFVG,
   computeEqualLevels,
@@ -261,6 +272,21 @@ export interface MarketSnapshot {
   ictBias: "rialzista" | "ribassista" | "laterale" | "in disaccordo";
   biasD1: string;
   biasH4: string;
+  // Concetti ICT originali (vedi ictOriginale.ts)
+  livelliApertura: LivelliApertura;
+  /** Fascia 62-79% dell'ultimo impulso M15: dove entrare dentro la zona. */
+  oteM15: Ote | null;
+  killZone: ContestoKillZone;
+  judasSwing: JudasSwing;
+  // H4: NARRATIVA. Nell'impianto ICT il 4 ore non e' una conferma ma il
+  // livello che dice dove il prezzo vuole andare -- quale pool di liquidita'
+  // e' il bersaglio, quali zone istituzionali contano. Prima da H4 si
+  // estraeva solo un "bias" rialzista/ribassista, buttando via struttura,
+  // order block e FVG: le candele venivano scaricate e quasi non usate.
+  ictStrutturaH4: StructureResult;
+  ictOrderBlocksH4: OrderBlock[];
+  ictFvgH4: FVG[];
+  ictLivelliUgualiH4: LivelliUguali;
   ictStrutturaH1: StructureResult;
   ictOrderBlocksH1: OrderBlock[];
   ictFvgH1: FVG[];
@@ -376,6 +402,14 @@ async function tryTwelveData(): Promise<MarketSnapshot | null> {
     biasD1,
     biasH4,
     ictBias,
+    livelliApertura: calcolaLivelliApertura(c1d ?? [], xau.close),
+    oteM15: oteDaSwing(computeSwings(c15), xau.close),
+    killZone: killZoneCorrente(adesso),
+    judasSwing: rilevaJudasSwing(c15),
+    ictStrutturaH4: computeStructure(c4h ?? []),
+    ictOrderBlocksH4: computeOrderBlocks(c4h ?? []),
+    ictFvgH4: computeFVG(c4h ?? []),
+    ictLivelliUgualiH4: computeEqualLevels(c4h ?? [], computeATR(c4h ?? [], 14)),
     ictStrutturaH1: computeStructure(c1h),
     ictOrderBlocksH1: computeOrderBlocks(c1h),
     ictFvgH1: computeFVG(c1h),
@@ -478,6 +512,14 @@ async function tryMetaApi(): Promise<MarketSnapshot | null> {
     biasD1,
     biasH4,
     ictBias,
+    livelliApertura: calcolaLivelliApertura(c1d ?? [], xau.close),
+    oteM15: oteDaSwing(computeSwings(c15), xau.close),
+    killZone: killZoneCorrente(adesso),
+    judasSwing: rilevaJudasSwing(c15),
+    ictStrutturaH4: computeStructure(c4h ?? []),
+    ictOrderBlocksH4: computeOrderBlocks(c4h ?? []),
+    ictFvgH4: computeFVG(c4h ?? []),
+    ictLivelliUgualiH4: computeEqualLevels(c4h ?? [], computeATR(c4h ?? [], 14)),
     ictStrutturaH1: computeStructure(c1h),
     ictOrderBlocksH1: computeOrderBlocks(c1h),
     ictFvgH1: computeFVG(c1h),

@@ -139,11 +139,7 @@ export default async function Home() {
           <div className="space-y-5">
             <AiPauseToggle />
             <GenerateSignalButton />
-            <SignalPanel
-              signal={currentSignal}
-              prezzoCorrente={xauQuote.price}
-              atr={marketSnapshot?.raw?.atr15m !== undefined && marketSnapshot?.raw?.atr15m !== null ? Number(marketSnapshot.raw.atr15m) : null}
-            />
+            <SignalPanel signal={currentSignal} />
             <MacroContext dxy={dxyQuote} us10y={us10yQuote} />
             <MarketHoursCompact mercati={marketCalendar} />
             <ContextFeed events={calendar} news={news} />

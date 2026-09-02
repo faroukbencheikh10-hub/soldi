@@ -77,7 +77,7 @@ export function shouldCallAI(
 // nulla di interessante. Questo filtro gira in locale, a costo zero, e lascia
 // passare la chiamata all'AI solo se rileva almeno `sogliaSegnali` elementi
 // tecnici rilevanti: BOS/CHoCH (M15 o M5), displacement (impulso >= 1 ATR con
-// rigetto su 5m, 15m o 30m), oppure la rottura della liquidita' delle ultime 24h.
+// rigetto su 5m o 15m), oppure la rottura della liquidita' delle ultime 24h.
 //
 // NON cambia la strategia: quando il filtro blocca, il ciclo viene comunque
 // registrato come NO_TRADE con la spiegazione, esattamente come gli altri cicli.
@@ -87,7 +87,7 @@ export function shouldCallAI(
 const DISPLACEMENT_MIN_ATR = 1;
 
 export interface TechnicalSetupInput {
-  // Timeframe guida della terna operativa M30/M15/M5. Era H1, che non e' piu'
+  // Timeframe di setup nell'impianto H4/H1 -> M15 -> M5. Era H1, che non e' piu'
   // un timeframe di analisi: le candele orarie servono solo a liquidita_24h.
   ictStrutturaM15: StructureResult;
   ictStrutturaM5: StructureResult;
@@ -99,10 +99,12 @@ export interface TechnicalSetupInput {
   // rilevaRangeAccumulo). Se attivo, il filtro blocca; il motivo finisce
   // nello storico al posto della spiegazione dell'AI.
   rangeAccumulo?: { attivo: boolean; motivo: string } | null;
-  // Zone di ingresso (Order Block e FVG) sui timeframe che guidano il setup.
-  // Servono al veto "nessuna zona sotto il prezzo" qui sotto.
-  ictOrderBlocksM30?: { top: number; bottom: number }[];
-  ictFvgM30?: { top: number; bottom: number }[];
+  // Zone di ingresso (Order Block e FVG) dei tre livelli H4/H1/M15.
+  // Servono al veto "prezzo fuori da ogni zona" piu' sotto.
+  ictOrderBlocksH4?: { top: number; bottom: number }[];
+  ictFvgH4?: { top: number; bottom: number }[];
+  ictOrderBlocksH1?: { top: number; bottom: number }[];
+  ictFvgH1?: { top: number; bottom: number }[];
   ictOrderBlocksM15?: { top: number; bottom: number }[];
   ictFvgM15?: { top: number; bottom: number }[];
 }
@@ -161,10 +163,6 @@ export function hasTechnicalSetup(
     segnali.push(`displacement 15m (impulso ${snapshot.rigetto15m.ampiezzaImpulsoInAtr?.toFixed(2)} ATR)`);
   }
 
-  if (isDisplacement(snapshot.rigetto30m)) {
-    segnali.push(`displacement 30m (impulso ${snapshot.rigetto30m.ampiezzaImpulsoInAtr?.toFixed(2)} ATR)`);
-  }
-
   const liq = snapshot.liquidita24h;
   if (liq && Number.isFinite(prezzo)) {
     if (prezzo >= liq.massimo) {
@@ -188,9 +186,14 @@ export function hasTechnicalSetup(
   //   prezzo FUORI da ogni zona -> 6 vincite, 9 perdite, +6.30R
   // Il veto quindi non taglia solo la spesa (circa un ciclo su cinque), taglia
   // anche la categoria di trade che rende peggio.
+  //
+  // Le zone considerate sono quelle dei tre livelli: M15 e' dove nasce
+  // l'entry, H4/H1 sono le zone istituzionali della narrativa.
   const zone = [
-    ...(snapshot.ictOrderBlocksM30 ?? []),
-    ...(snapshot.ictFvgM30 ?? []),
+    ...(snapshot.ictOrderBlocksH4 ?? []),
+    ...(snapshot.ictFvgH4 ?? []),
+    ...(snapshot.ictOrderBlocksH1 ?? []),
+    ...(snapshot.ictFvgH1 ?? []),
     ...(snapshot.ictOrderBlocksM15 ?? []),
     ...(snapshot.ictFvgM15 ?? []),
   ];
@@ -205,14 +208,14 @@ export function hasTechnicalSetup(
       allowed: false,
       count,
       segnali,
-      reason: `Prezzo ${prezzo.toFixed(2)} fuori da tutte le ${zone.length} zone di ingresso (Order Block e FVG su M30/M15): nessun pullback eseguibile, AI non chiamata.`,
+      reason: `Prezzo ${prezzo.toFixed(2)} fuori da tutte le ${zone.length} zone di ingresso (Order Block e FVG su H4/H1/M15): nessun pullback eseguibile, AI non chiamata.`,
     };
   }
 
-  // Veto: prezzo nel cuore di un range di accumulo. Vince sul conteggio dei
-  // segnali -- un BOS o un displacement in mezzo a un range fra due pool di
-  // liquidita' e' quasi sempre rumore. Non scatta sui bordi del range ne'
-  // quando la rottura e' gia' in corso (vedi rilevaRangeAccumulo).
+  // Veto: il prezzo e' chiuso da due ore in una fascia M5 stretta rispetto
+  // all'ATR -- una zona di accumulo. Vince sul conteggio dei segnali: dentro
+  // una fascia cosi' i trade nascono e muoiono contro il bordo opposto. Si
+  // spegne appena arriva una rottura strutturale (vedi rilevaRangeAccumulo).
   if (snapshot.rangeAccumulo?.attivo) {
     return {
       allowed: false,

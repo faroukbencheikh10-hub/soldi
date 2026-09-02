@@ -454,10 +454,10 @@ export function firmaContesto(ctx: ContestoMercato): string {
     const amp = tf.ampiezzaRecenteInAtr === null ? "na" : String(Math.round(tf.ampiezzaRecenteInAtr * 2) / 2);
     return `${tf.timeframe}:${tf.regime}:${tf.fase}:${tf.momentum.direzione}:${amp}`;
   };
-  const eventi = [...ctx.m30.eventiAttiviIds, ...ctx.m15.eventiAttiviIds, ...ctx.m5.eventiAttiviIds]
-    .sort()
-    .join(",");
-  return `${perTf(ctx.m30)}|${perTf(ctx.m15)}|${perTf(ctx.m5)}#eventi=${eventi}`;
+  // M30 escluso dall'impronta (02/09): non guida piu' il setup, e un cambio
+  // di regime/fase su M30 non deve far ripartire una chiamata AI.
+  const eventi = [...ctx.m15.eventiAttiviIds, ...ctx.m5.eventiAttiviIds].sort().join(",");
+  return `${perTf(ctx.m15)}|${perTf(ctx.m5)}#eventi=${eventi}`;
 }
 
 export interface Transizione {

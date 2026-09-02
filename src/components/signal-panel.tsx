@@ -102,15 +102,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function SignalPanel({
-  signal,
-  prezzoCorrente = null,
-  atr = null,
-}: {
-  signal: TradeSignal | null;
-  prezzoCorrente?: number | null;
-  atr?: number | null;
-}) {
+export function SignalPanel({ signal }: { signal: TradeSignal | null }) {
   if (!signal) {
     return (
       <div className="rounded-xl border border-border bg-panel p-5">
