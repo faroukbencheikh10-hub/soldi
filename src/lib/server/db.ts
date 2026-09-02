@@ -277,13 +277,21 @@ export async function getLatestContextSnapshot() {
   return res.rows[0] ?? null;
 }
 
+// Stesso spartiacque di getStats: senza, lo storico visibile in dashboard
+// mostrerebbe ancora i vecchi trade mischiati ai nuovi finche' non se ne
+// accumulano 20 di nuovi -- le statistiche numeriche sarebbero pulite ma la
+// lista sotto continuerebbe a far vedere la strategia precedente, il
+// contrario di "ricontare da zero".
 export async function getSignalHistory(limit = 20) {
   const client = getPool();
+  const spartiacque = await getSetting("stats_da_il");
   const res = await client.query(
     `SELECT id, created_at, direction, entry, stop_loss, tp1, tp2, risk_reward,
             confidence, reasoning, outcome, result_r, closed_at
-     FROM signals WHERE is_demo = false ORDER BY created_at DESC LIMIT $1`,
-    [limit]
+     FROM signals
+     WHERE is_demo = false AND ($2::timestamptz IS NULL OR created_at >= $2)
+     ORDER BY created_at DESC LIMIT $1`,
+    [limit, spartiacque]
   );
   return res.rows;
 }
@@ -382,16 +390,33 @@ export async function closeSignal(
   }
 }
 
+// Le statistiche contano solo dallo SPARTIACQUE (impostazione
+// "stats_da_il", vedi setSpartiacqueStatistiche). Il 02/09 e' cambiata la
+// strategia -- narrativa H4/H1, setup M15, ICT completo, entry solo quando
+// gia' eseguibile, attivazione al tocco del prezzo -- ed e' una logica
+// diversa da quella con cui erano stati generati i segnali precedenti.
+// Mescolarli avrebbe reso impossibile capire come si comporta la versione
+// attuale: bastava un blocco di 73 righe orfane dell'entry, chiuse tutte
+// insieme come LOSS l'1/9, a portare il totale storico da +65R a -8R.
+//
+// Lo spartiacque e' un'impostazione, non una cancellazione: lo storico
+// resta tutto in tabella e resta consultabile per chi lo cerca
+// esplicitamente (vedi getStats con includiStoricoPrecedente).
 export async function getStats() {
   const client = getPool();
-  const res = await client.query(`
-    SELECT
-      COUNT(*) FILTER (WHERE is_demo = false AND direction <> 'NO_TRADE') AS total,
-      COUNT(*) FILTER (WHERE is_demo = false AND outcome = 'WIN') AS wins,
-      COUNT(*) FILTER (WHERE is_demo = false AND outcome IN ('WIN','LOSS')) AS decided,
-      AVG(risk_reward) FILTER (WHERE is_demo = false AND direction <> 'NO_TRADE' AND risk_reward > 0) AS avg_rr
-    FROM signals
-  `);
+  const spartiacque = await getSetting("stats_da_il");
+  // Query parametrizzata anche per un valore che non arriva mai da input
+  // utente: e' l'unica forma sicura per costruire SQL con un valore
+  // variabile, a prescindere da dove venga quel valore.
+  const res = await client.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE is_demo = false AND direction <> 'NO_TRADE' AND ($1::timestamptz IS NULL OR created_at >= $1)) AS total,
+       COUNT(*) FILTER (WHERE is_demo = false AND outcome = 'WIN' AND ($1::timestamptz IS NULL OR created_at >= $1)) AS wins,
+       COUNT(*) FILTER (WHERE is_demo = false AND outcome IN ('WIN','LOSS') AND ($1::timestamptz IS NULL OR created_at >= $1)) AS decided,
+       AVG(risk_reward) FILTER (WHERE is_demo = false AND direction <> 'NO_TRADE' AND risk_reward > 0 AND ($1::timestamptz IS NULL OR created_at >= $1)) AS avg_rr
+     FROM signals`,
+    [spartiacque]
+  );
   return res.rows[0];
 }
 
