@@ -99,6 +99,12 @@ export interface TechnicalSetupInput {
   // rilevaRangeAccumulo). Se attivo, il filtro blocca; il motivo finisce
   // nello storico al posto della spiegazione dell'AI.
   rangeAccumulo?: { attivo: boolean; motivo: string } | null;
+  // Zone di ingresso (Order Block e FVG) sui timeframe che guidano il setup.
+  // Servono al veto "nessuna zona sotto il prezzo" qui sotto.
+  ictOrderBlocksM30?: { top: number; bottom: number }[];
+  ictFvgM30?: { top: number; bottom: number }[];
+  ictOrderBlocksM15?: { top: number; bottom: number }[];
+  ictFvgM15?: { top: number; bottom: number }[];
 }
 
 export interface TechnicalSetupResult {
@@ -169,6 +175,39 @@ export function hasTechnicalSetup(
   }
 
   const count = segnali.length;
+
+  // VETO: il prezzo non e' dentro nessuna zona di ingresso.
+  //
+  // L'entry di un setup ICT e' sempre il bordo di un Order Block o di una FVG,
+  // e da questa versione un segnale viene emesso solo se e' gia' eseguibile al
+  // prezzo corrente. Se il prezzo non si trova dentro nessuna di quelle zone,
+  // un ingresso eseguibile non puo' esistere: chiamare l'AI e' spesa certa.
+  //
+  // Sui dati reali (3 giorni, 56 trade generati) la differenza e' netta:
+  //   prezzo DENTRO una zona -> 21 vincite, 3 perdite, +35.16R
+  //   prezzo FUORI da ogni zona -> 6 vincite, 9 perdite, +6.30R
+  // Il veto quindi non taglia solo la spesa (circa un ciclo su cinque), taglia
+  // anche la categoria di trade che rende peggio.
+  const zone = [
+    ...(snapshot.ictOrderBlocksM30 ?? []),
+    ...(snapshot.ictFvgM30 ?? []),
+    ...(snapshot.ictOrderBlocksM15 ?? []),
+    ...(snapshot.ictFvgM15 ?? []),
+  ];
+  const dentroUnaZona = zone.some((z) => {
+    const top = Number(z?.top);
+    const bottom = Number(z?.bottom);
+    return Number.isFinite(top) && Number.isFinite(bottom) && prezzo >= bottom && prezzo <= top;
+  });
+
+  if (zone.length > 0 && !dentroUnaZona) {
+    return {
+      allowed: false,
+      count,
+      segnali,
+      reason: `Prezzo ${prezzo.toFixed(2)} fuori da tutte le ${zone.length} zone di ingresso (Order Block e FVG su M30/M15): nessun pullback eseguibile, AI non chiamata.`,
+    };
+  }
 
   // Veto: prezzo nel cuore di un range di accumulo. Vince sul conteggio dei
   // segnali -- un BOS o un displacement in mezzo a un range fra due pool di
