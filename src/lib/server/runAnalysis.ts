@@ -4,6 +4,10 @@ import {
   insertMarketSnapshot,
   insertContextSnapshot,
   getLatestSignal,
+  getSegnaleAttivo,
+  getSegnaliInAttesa,
+  attivaSegnale,
+  scadeSegnaleInAttesa,
   closeSignal,
   insertSignal5m,
   getLatestSignal5m,
@@ -49,6 +53,14 @@ import {
 } from "@/lib/server/marketContext";
 
 const SIGNAL_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+
+// Quanto un segnale resta IN ATTESA che il prezzo torni sull'entry prima di
+// essere abbandonato. Novanta minuti: oltre, il contesto che aveva prodotto
+// il setup non e' piu' quello (gli eventi ICT hanno scadenze di 20-90 minuti,
+// vedi setupState). Un segnale mai attivato non e' una perdita -- non e' mai
+// stato un trade -- ma tenerlo vivo troppo a lungo significherebbe entrare su
+// un'analisi vecchia.
+const ATTESA_MASSIMA_MS = 90 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // DISTANZA DELL'INGRESSO DAL PREZZO
@@ -399,9 +411,118 @@ export async function runAnalysis(options?: { force?: boolean }) {
   const daRisvegliare =
     !inPausa && (await getSetting("ai_refresh_al_risveglio")) === "true";
 
-  const latest = await getLatestSignal();
+  // ============ SEGNALI IN ATTESA: attivazione al tocco dell'entry ========
+  //
+  // Un segnale nasce IN ATTESA e non manda notifiche. Qui, a ogni ciclo, si
+  // guarda se il prezzo ha toccato la sua entry: in quel momento diventa un
+  // trade vero, parte l'unica notifica e comincia il monitoraggio di stop e
+  // target. Se il prezzo non ci arriva entro ATTESA_MASSIMA_MS il segnale
+  // muore senza aver mai disturbato nessuno.
+  //
+  // L'attesa si misura dalla creazione; l'esito dal momento dell'attivazione,
+  // altrimenti un trade partito dopo un'ora risulterebbe vecchio di un'ora.
+  // Prezzo letto UNA volta per ciclo e riusato: lo servono sia il blocco di
+  // attivazione qui sotto sia il monitor del trade attivo. Due chiamate
+  // separate avrebbero potuto anche restituire valori diversi, con un segnale
+  // attivato a un prezzo e valutato a un altro.
+  let prezzoCiclo: number | null = null;
+  const inAttesa = await getSegnaliInAttesa();
+  // Quanti restano in attesa DOPO questo ciclo: quelli appena attivati o
+  // scaduti non contano piu'. Serve per il blocco poco piu' sotto, che
+  // altrimenti userebbe la fotografia scattata prima degli aggiornamenti.
+  let restanoInAttesa = 0;
+  if (inAttesa.length > 0) {
+    prezzoCiclo = await getCurrentPrice();
+    const prezzoOra = prezzoCiclo;
+    for (const att of inAttesa) {
+      const eEntry = Number(att.entry);
+      // Isolato per singolo segnale: se il DB fallisce (timeout,
+      // disconnessione) non deve interrompere l'intero ciclo -- il
+      // monitoraggio del trade attivo e la generazione di nuovi segnali
+      // devono proseguire comunque. Si riprova al ciclo successivo.
+      try {
+        const scadutaAttesa = Date.now() - new Date(att.created_at).getTime() > ATTESA_MASSIMA_MS;
+
+        const toccata =
+          prezzoOra !== null && Number.isFinite(eEntry)
+            ? att.direction === "BUY"
+              ? prezzoOra <= eEntry
+              : prezzoOra >= eEntry
+            : false;
+
+        if (toccata) {
+          // Il prezzo puo' aver attraversato entry E stop nello stesso salto:
+          // in quel caso il trade nascerebbe gia' perso. Stessa cosa se ha
+          // superato anche il target, che lo chiuderebbe come WIN a pieno R
+          // senza essere mai stato vivo. In entrambi i casi non si attiva e non
+          // parte nessuna notifica: il segnale muore com'e' nato, a zero.
+          const eStop = Number(att.stop_loss);
+          const eTp1 = Number(att.tp1);
+          const oltreStop =
+            Number.isFinite(eStop) && (att.direction === "BUY" ? prezzoOra! <= eStop : prezzoOra! >= eStop);
+          const oltreTarget =
+            Number.isFinite(eTp1) && (att.direction === "BUY" ? prezzoOra! >= eTp1 : prezzoOra! <= eTp1);
+
+          if (oltreStop || oltreTarget) {
+            await scadeSegnaleInAttesa(
+              att.id,
+              `\n\n[Mai attivato: al tocco dell'entry ${eEntry.toFixed(2)} il prezzo era gia' ` +
+                `${prezzoOra!.toFixed(2)}, oltre ${oltreStop ? `lo stop ${eStop.toFixed(2)}` : `il target ${eTp1.toFixed(2)}`}. ` +
+                `Il trade sarebbe nato gia' chiuso: nessuna notifica inviata.]`
+            );
+            console.log(
+              `[runAnalysis] segnale ${att.id} non attivato: prezzo ${prezzoOra!.toFixed(2)} oltre ${
+                oltreStop ? "lo stop" : "il target"
+              }`
+            );
+            continue;
+          }
+
+          await attivaSegnale(att.id);
+          const prezzoTesto = prezzoOra !== null ? prezzoOra.toFixed(2) : "n/d";
+          sendPushToAll({
+            title: `${att.direction} · prezzo ${prezzoTesto}`,
+            body: `Entry ${eEntry.toFixed(2)} · SL ${Number(att.stop_loss).toFixed(2)} · TP1 ${Number(
+              att.tp1
+            ).toFixed(2)} · TP2 ${Number(att.tp2).toFixed(2)} · Conf ${Number(att.confidence)}%`,
+            url: "/",
+          }).catch((err) => console.error("[runAnalysis] invio push attivazione fallito:", err));
+          console.log(`[runAnalysis] segnale ${att.id} attivato a ${prezzoTesto}`);
+          continue;
+        }
+
+        if (!scadutaAttesa) {
+          restanoInAttesa += 1;
+          continue;
+        }
+
+        {
+          await scadeSegnaleInAttesa(
+            att.id,
+            `\n\n[Mai attivato: il prezzo non e' tornato sull'entry ${eEntry.toFixed(2)} entro ` +
+              `${Math.round(ATTESA_MASSIMA_MS / 60000)} minuti. Nessun trade e' stato aperto.]`
+          );
+        }
+      } catch (err) {
+        console.error(`[runAnalysis] attivazione/scadenza fallita per il segnale ${att.id}:`, err);
+      }
+    }
+  }
+  // ============ fine attivazione ==========================================
+
+  // Da qui in poi si segue SOLO il trade gia' attivato: quelli in attesa non
+  // sono trade e non bloccano la generazione di nuovi segnali.
+  const latest = await getSegnaleAttivo();
+
+  // Un segnale ANCORA IN ATTESA blocca la generazione esattamente come un
+  // trade aperto. Senza questo, ogni ciclo ne creerebbe uno nuovo e se ne
+  // accumulerebbero decine: al primo movimento partirebbero notifiche a
+  // raffica e il monitor ne seguirebbe comunque uno solo.
+  const attesaPendente = restanoInAttesa > 0;
+
   const hasOpenTrade =
-    latest && (latest.direction === "BUY" || latest.direction === "SELL") && !latest.outcome;
+    (latest && (latest.direction === "BUY" || latest.direction === "SELL") && !latest.outcome) ||
+    attesaPendente;
 
   let currentPrice: number | null = null;
   let naturalOutcome: "WIN" | "LOSS" | null = null;
@@ -412,15 +533,24 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   let expired = false;
 
-  if (hasOpenTrade) {
-    currentPrice = await getCurrentPrice();
+  if (hasOpenTrade && latest) {
+    currentPrice = prezzoCiclo ?? (await getCurrentPrice());
     entry = Number(latest.entry);
     stopLoss = Number(latest.stop_loss);
     tp1 = Number(latest.tp1);
     risk = Math.abs(entry - stopLoss);
 
     // Prima fonte: le candele dall'apertura del trade in poi.
-    naturalOutcome = await esitoDalleCandele(latest.direction, latest.created_at, stopLoss, tp1);
+    // Le candele si leggono dall'ATTIVAZIONE, non dalla creazione: il trade
+    // esiste da quando il prezzo ha toccato l'entry. Contare da created_at
+    // farebbe vedere movimenti avvenuti quando il trade non era ancora vivo,
+    // e chiuderebbe come WIN o LOSS cose mai accadute.
+    naturalOutcome = await esitoDalleCandele(
+      latest.direction,
+      latest.attivato_il ?? latest.created_at,
+      stopLoss,
+      tp1
+    );
 
     // Ripiego sul prezzo dell'istante solo se le candele non sono disponibili.
     if (naturalOutcome === null && currentPrice !== null) {
@@ -444,7 +574,9 @@ export async function runAnalysis(options?: { force?: boolean }) {
       // gira a ogni ciclo, quindi l'avviso parte al primo passaggio utile.
       await avvisaParziale(latest, currentPrice);
 
-      const ageMs = Date.now() - new Date(latest.created_at).getTime();
+      // Anche la durata massima parte dall'attivazione: un trade che ha
+      // aspettato un'ora prima di partire ha comunque le sue 4 ore di vita.
+      const ageMs = Date.now() - new Date(latest.attivato_il ?? latest.created_at).getTime();
       expired = ageMs > SIGNAL_TIMEOUT_MS;
 
       if (expired) {
@@ -485,6 +617,21 @@ export async function runAnalysis(options?: { force?: boolean }) {
     }
   }
 
+
+  // Un segnale ANCORA IN ATTESA (nessun trade attivo, ma un ordine limite
+  // gia' piazzato) blocca la generazione qui, PRIMA di scaricare uno snapshot
+  // e valutare un nuovo setup. Senza questa uscita esplicita, hasOpenTrade
+  // segnava correttamente il blocco ma il flusso proseguiva comunque: con un
+  // ciclo sfortunato l'AI poteva essere chiamata e generare un secondo
+  // segnale mentre il primo aspettava ancora il suo prezzo.
+  if (attesaPendente && !force) {
+    return {
+      skipped: true,
+      reason: "signal_pending",
+      note: "Un segnale e' in attesa che il prezzo tocchi l'entry: nessuna nuova generazione finche' non si attiva o scade.",
+    };
+  }
+
   const marketSnapshot = await getMarketSnapshot();
 
   // ================ MEMORIA CANDELE (solo infrastruttura) =================
@@ -522,7 +669,12 @@ export async function runAnalysis(options?: { force?: boolean }) {
   }
   // ================ fine MEMORIA CANDELE ====================================
 
-  if (hasOpenTrade && !naturalOutcome && !expired && force) {
+  // Attenzione a "latest": hasOpenTrade ora e' vero anche quando c'e' solo un
+  // segnale IN ATTESA, e in quel caso latest e' null. Qui serve il trade
+  // ATTIVO, quindi si controlla latest esplicitamente invece di fidarsi del
+  // flag: senza, un "Chiudi e rigenera" con solo un segnale in attesa
+  // andrebbe in errore su latest!.id.
+  if (latest && !naturalOutcome && !expired && force) {
     // Prima qui si registrava sempre 0: 21 dei 24 "BREAKEVEN" erano in realta'
     // trade interrotti a meta' volo, in media dopo 21 minuti, e falsavano meta'
     // del campione. Ora si registra il risultato reale al momento del click,
@@ -530,14 +682,28 @@ export async function runAnalysis(options?: { force?: boolean }) {
     const resultR =
       currentPrice !== null && risk > 0
         ? Number(
-            ((latest!.direction === "BUY" ? currentPrice - entry : entry - currentPrice) / risk).toFixed(2)
+            ((latest.direction === "BUY" ? currentPrice - entry : entry - currentPrice) / risk).toFixed(2)
           )
         : 0;
     const note =
       currentPrice === null
         ? "\n\n[Chiuso manualmente: nuova generazione richiesta dall'utente, prezzo attuale non verificabile, risultato non misurabile.]"
         : "\n\n[Chiuso manualmente: sostituito da una nuova generazione richiesta dall'utente. Risultato reale " + resultR + "R al momento della chiusura.]";
-    await closeSignal(latest!.id, "BREAKEVEN", resultR, note);
+    await closeSignal(latest.id, "BREAKEVEN", resultR, note);
+  }
+
+  // Anche i segnali IN ATTESA vanno chiusi quando si forza una nuova
+  // generazione: sono setup vecchi che aspettano un prezzo, e lasciarli vivi
+  // significherebbe vederli attivare piu' tardi accanto al segnale nuovo.
+  // Chiusi a 0R perche' non sono mai stati trade.
+  if (force && restanoInAttesa > 0) {
+    for (const att of inAttesa) {
+      if (att.outcome) continue;
+      await scadeSegnaleInAttesa(
+        att.id,
+        "\n\n[Mai attivato: annullato da una nuova generazione richiesta dall'utente.]"
+      );
+    }
   }
 
   // ======================= MONITOR (gira a ogni ciclo) ====================
@@ -900,64 +1066,41 @@ export async function runAnalysis(options?: { force?: boolean }) {
   });
   let signal = validateSignal(rawSignal);
 
-  // NIENTE ORDINI PENDENTI (02/09).
+  // OGNI SEGNALE GENERATO VIENE INVIATO (02/09).
   //
-  // L'entry di un setup ICT e' il bordo della zona di pullback, e puo' stare
-  // lontano dal prezzo: il 02/09 un SELL aveva entry 4312.20 con il prezzo a
-  // 4302.68, cioe' un limite che poteva non arrivare mai. Un segnale del
-  // genere non e' eseguibile nel momento in cui arriva la notifica, e chi lo
-  // esegue a mercato parte con gran parte dello stop gia' bruciata.
+  // Per qualche ora i segnali con entry non ancora raggiunta venivano
+  // scartati. Scelta rivista: l'entry di un setup ICT e' il bordo della zona
+  // di pullback, quindi un ordine limite e' il comportamento normale del
+  // metodo, non un difetto. E i dati lo confermavano: i trade con entry oltre
+  // uno stop di distanza avevano fatto 7 vincite su 4 perdite (+11.72R).
+  // Scartarli buttava via trade buoni; il problema vero era la notifica, che
+  // diceva "eseguibile ora" anche quando non lo era -- ed e' li' che si
+  // risolve, nel titolo del push.
   //
-  // Da qui in poi si emettono SOLO segnali gia' eseguibili: il prezzo deve
-  // aver raggiunto la zona di ingresso (sotto l'entry per un BUY, sopra per
-  // un SELL). Gli altri diventano NO_TRADE con la ragione scritta nello
-  // storico, cosi' resta traccia di quanti e quali sono stati scartati.
+  // RESTA il controllo sui trade nati gia' morti, che veniva da un bug vero:
+  // un segnale il cui stop o target sono GIA' stati superati dal prezzo non
+  // e' un ordine pendente, e' un trade che nascerebbe perso (o gia' vinto
+  // senza essere mai esistito, gonfiando le statistiche). Quelli restano
+  // NO_TRADE.
   if (signal.direction === "BUY" || signal.direction === "SELL") {
     const prezzoOra = marketSnapshot.xauusd;
     const entrySegnale = Number(signal.entry);
     const stopSegnale = Number(signal.stopLoss);
     const tp1Segnale = Number(signal.tp1);
 
-    // Il prezzo deve aver raggiunto la zona, ma non deve averla ATTRAVERSATA
-    // fino a invalidare il trade. Il controllo era one-sided (solo
-    // "prezzo <= entry" per un BUY) e questo lasciava passare due casi
-    // assurdi, entrambi con conseguenze reali:
-    //
-    //  - prezzo GIA' OLTRE LO STOP: un BUY con entry 4300 e stop 4295 con il
-    //    prezzo a 4280 passava il controllo. Sarebbe arrivata la notifica di
-    //    un trade gia' perso in partenza, e il monitor l'avrebbe chiuso come
-    //    LOSS al primo ciclo.
-    //  - prezzo GIA' OLTRE IL TARGET: lo stesso BUY con il prezzo gia' sopra
-    //    TP1 sarebbe stato chiuso come WIN a pieno R senza che il trade sia
-    //    mai esistito, gonfiando le statistiche.
-    //
-    // Ora il prezzo deve stare nella finestra utile: dopo lo stop e prima del
-    // target, dal lato giusto dell'entry.
-    let eseguibile = false;
-    let motivoNonEseguibile = "";
-    if (!Number.isFinite(prezzoOra) || !Number.isFinite(entrySegnale)) {
-      motivoNonEseguibile = "prezzo o entry non validi";
-    } else if (signal.direction === "BUY" ? prezzoOra > entrySegnale : prezzoOra < entrySegnale) {
-      motivoNonEseguibile = "il prezzo non ha ancora raggiunto la zona: sarebbe un ordine pendente";
-    } else if (
-      Number.isFinite(stopSegnale) &&
-      (signal.direction === "BUY" ? prezzoOra <= stopSegnale : prezzoOra >= stopSegnale)
-    ) {
-      motivoNonEseguibile = `il prezzo ha gia' superato lo stop ${stopSegnale.toFixed(2)}: il trade nascerebbe gia' perso`;
-    } else if (
-      Number.isFinite(tp1Segnale) &&
-      (signal.direction === "BUY" ? prezzoOra >= tp1Segnale : prezzoOra <= tp1Segnale)
-    ) {
-      motivoNonEseguibile = `il prezzo ha gia' raggiunto il target ${tp1Segnale.toFixed(2)}: non resta niente da prendere`;
-    } else {
-      eseguibile = true;
+    let motivoScarto = "";
+    if (Number.isFinite(prezzoOra) && Number.isFinite(stopSegnale) && Number.isFinite(entrySegnale)) {
+      if (signal.direction === "BUY" ? prezzoOra <= stopSegnale : prezzoOra >= stopSegnale) {
+        motivoScarto = `il prezzo ${Number(prezzoOra).toFixed(2)} ha gia' superato lo stop ${stopSegnale.toFixed(2)}: il trade nascerebbe gia' perso`;
+      } else if (
+        Number.isFinite(tp1Segnale) &&
+        (signal.direction === "BUY" ? prezzoOra >= tp1Segnale : prezzoOra <= tp1Segnale)
+      ) {
+        motivoScarto = `il prezzo ${Number(prezzoOra).toFixed(2)} ha gia' raggiunto il target ${tp1Segnale.toFixed(2)}: non resta niente da prendere`;
+      }
     }
 
-    if (!eseguibile) {
-      const distanza = Math.abs(entrySegnale - prezzoOra).toFixed(2);
-      // Livelli azzerati insieme alla direzione: un NO_TRADE che mostra ancora
-      // entry, stop e target sembra un trade da eseguire, ed e' esattamente il
-      // fraintendimento che questa regola doveva evitare.
+    if (motivoScarto) {
       signal = validateSignal({
         ...rawSignal,
         direction: "NO_TRADE",
@@ -966,10 +1109,7 @@ export async function runAnalysis(options?: { force?: boolean }) {
         tp1: 0,
         tp2: 0,
         riskReward: 0,
-        reasoning:
-          `${rawSignal.reasoning ?? ""}\n\n[Scartato: il segnale ${signal.direction} aveva entry ` +
-          `${entrySegnale.toFixed(2)} con prezzo ${Number(prezzoOra).toFixed(2)} (${distanza} di ` +
-          `distanza) — ${motivoNonEseguibile}.]`,
+        reasoning: `${rawSignal.reasoning ?? ""}\n\n[Scartato: il segnale ${signal.direction} aveva entry ${entrySegnale.toFixed(2)} — ${motivoScarto}.]`,
       } as typeof rawSignal);
     }
   }
@@ -978,30 +1118,18 @@ export async function runAnalysis(options?: { force?: boolean }) {
   await setSetting("setup_last_signal_id", saved.id);
 
   if (signal.direction === "BUY" || signal.direction === "SELL") {
-    // Notifica immediata alla nascita del segnale. Il testo dice comunque
-    // quanto dista l'entry dal prezzo, cosi' si vede a colpo d'occhio se il
-    // livello e' gia' buono o se e' un ordine da piazzare in attesa.
-    // Il TITOLO porta il PREZZO REALE di mercato, non l'entry.
+    // NESSUNA NOTIFICA ALLA NASCITA (02/09).
     //
-    // Entry e prezzo ormai quasi coincidono (un segnale nasce solo se il
-    // prezzo e' gia' nella finestra utile), ma non sono la stessa cosa:
-    // l'entry e' il livello scritto dall'AI, il prezzo e' quello a cui il
-    // mercato sta scambiando in questo istante. E' quest'ultimo il numero
-    // che serve per eseguire, quindi sta nel titolo -- la prima e spesso
-    // unica riga che si legge sul telefono.
-    const prezzoReale = Number.isFinite(marketSnapshot.xauusd)
-      ? marketSnapshot.xauusd.toFixed(2)
-      : "n/d";
-
-    sendPushToAll({
-      title: `${signal.direction} ORA a ${prezzoReale}`,
-      body: `Entry ${Number(signal.entry).toFixed(2)} · SL ${Number(signal.stopLoss).toFixed(
-        2
-      )} · TP1 ${Number(signal.tp1).toFixed(2)} · TP2 ${Number(signal.tp2).toFixed(
-        2
-      )} · Conf ${signal.confidence}%`,
-      url: "/",
-    }).catch((err) => console.error("[runAnalysis] invio push fallito:", err));
+    // Il segnale nasce IN ATTESA: l'entry e' il bordo della zona di pullback
+    // e il prezzo spesso deve ancora tornarci. Avvisare adesso significava
+    // mandare un trade non eseguibile, con il prezzo che nel frattempo si
+    // muove. La notifica parte ora dal blocco di ATTIVAZIONE, nel ciclo in
+    // cui il prezzo tocca davvero l'entry -- una sola, nel momento giusto.
+    console.log(
+      `[runAnalysis] segnale ${saved.id} creato in attesa: ${signal.direction} entry ${Number(
+        signal.entry
+      ).toFixed(2)}, prezzo ${Number(marketSnapshot.xauusd).toFixed(2)}`
+    );
   }
 
 

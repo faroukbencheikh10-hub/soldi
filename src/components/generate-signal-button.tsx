@@ -12,6 +12,13 @@ interface ConfermaChiusura {
   prezzoCorrente: number | null;
 }
 
+// Caso distinto: un segnale ancora IN ATTESA non e' un trade, quindi non ha
+// minuti-di-vita ne' un risultato in R da mostrare. Solo direzione ed entry.
+interface ConfermaAttesa {
+  direction: string;
+  entry: number;
+}
+
 export function GenerateSignalButton({
   endpoint = "/api/generate",
   label = "Genera segnale ora",
@@ -25,6 +32,7 @@ export function GenerateSignalButton({
   // Quando c'e' un trade aperto il primo click non genera: chiede conferma,
   // mostrando cosa si sta per chiudere e a quanto sta in questo momento.
   const [conferma, setConferma] = useState<ConfermaChiusura | null>(null);
+  const [confermaAttesa, setConfermaAttesa] = useState<ConfermaAttesa | null>(null);
   const router = useRouter();
 
   async function genera(confermaChiusura: boolean) {
@@ -42,6 +50,7 @@ export function GenerateSignalButton({
       if (!data.ok) {
         setError(data.error ?? "Errore durante la generazione.");
       } else if (data.skipped && data.reason === "conferma_richiesta") {
+        setConfermaAttesa(null);
         setConferma({
           direction: data.direction,
           entry: data.entry,
@@ -49,6 +58,9 @@ export function GenerateSignalButton({
           risultatoR: data.risultatoR ?? null,
           prezzoCorrente: data.prezzoCorrente ?? null,
         });
+      } else if (data.skipped && data.reason === "conferma_richiesta_attesa") {
+        setConferma(null);
+        setConfermaAttesa({ direction: data.direction, entry: data.entry });
       } else if (data.skipped && data.reason === "market_closed") {
         setConferma(null);
         setInfo("Mercato dell'oro chiuso in questo momento (weekend o pausa giornaliera delle 23:00).");
@@ -57,11 +69,18 @@ export function GenerateSignalButton({
         setInfo(
           `Segnale ${data.direction} gia' attivo (entry ${data.entry}) — nessun nuovo segnale finche' non si chiude.`
         );
+      } else if (data.skipped && data.reason === "signal_pending") {
+        setConferma(null);
+        setConfermaAttesa(null);
+        setInfo(
+          "Un segnale e' gia' in attesa che il prezzo tocchi l'entry — nessun nuovo segnale finche' non si attiva o scade."
+        );
       } else if (data.skipped && data.reason === "ai_paused") {
         setConferma(null);
         setInfo("Analisi AI in pausa. Riattivala dal pulsante in alto per generare un nuovo segnale.");
       } else {
         setConferma(null);
+        setConfermaAttesa(null);
         router.refresh();
       }
     } catch {
@@ -120,6 +139,43 @@ export function GenerateSignalButton({
           >
             {loading && <Loader2 size={12} className="animate-spin" />}
             Chiudi e rigenera
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (confermaAttesa) {
+    return (
+      <div className="rounded-lg border border-gold/40 bg-gold/10 p-3">
+        <div className="flex items-center gap-2">
+          <AlertTriangle size={14} className="text-gold shrink-0" />
+          <span className="text-xs font-semibold text-gold leading-none">
+            C&apos;e&apos; un segnale in attesa
+          </span>
+        </div>
+
+        <p className="text-[11px] text-muted mt-2 leading-snug">
+          {confermaAttesa.direction} con limite a {confermaAttesa.entry.toFixed(2)}, il prezzo non
+          l&apos;ha ancora raggiunto: non e&apos; mai stato un trade, non c&apos;e&apos; nessun
+          risultato da perdere.
+        </p>
+
+        <div className="flex gap-2 mt-3">
+          <button
+            onClick={() => setConfermaAttesa(null)}
+            disabled={loading}
+            className="flex-1 rounded-lg border border-border bg-panel2 text-text text-xs font-semibold py-2 hover:bg-panel transition-colors disabled:opacity-60"
+          >
+            Lascialo in attesa
+          </button>
+          <button
+            onClick={() => genera(true)}
+            disabled={loading}
+            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-sell/40 bg-sell/15 text-sell text-xs font-semibold py-2 hover:bg-sell/25 transition-colors disabled:opacity-60"
+          >
+            {loading && <Loader2 size={12} className="animate-spin" />}
+            Sostituiscilo
           </button>
         </div>
       </div>

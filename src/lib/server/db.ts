@@ -107,6 +107,24 @@ export async function ensureSchema() {
     -- M5/M15/M30. 'H1' resta ammesso: in tabella possono esistere righe H1
     -- ancora ACTIVE scritte prima del passaggio, e devono poter essere
     -- invalidate o fatte scadere invece di violare il vincolo.
+    -- ATTIVAZIONE DEL SEGNALE (02/09)
+    --
+    -- Un setup ICT ha l'entry sul bordo della zona di pullback, quindi il
+    -- prezzo spesso deve ancora tornarci: e' un ordine limite. Prima il
+    -- segnale nasceva gia' "attivo" e la notifica partiva subito, anche
+    -- quando non c'era niente da eseguire.
+    --
+    -- Ora il segnale nasce IN ATTESA (attivato_il NULL, nessuna notifica) e
+    -- viene attivato dal monitor nel ciclo in cui il prezzo tocca l'entry:
+    -- e' li' che parte l'unica notifica. Se il prezzo non ci arriva entro la
+    -- scadenza, il segnale muore senza aver mai disturbato nessuno.
+    --
+    -- Le righe gia' esistenti vengono considerate attivate alla creazione,
+    -- cosi' lo storico resta coerente e le statistiche non cambiano.
+    ALTER TABLE signals ADD COLUMN IF NOT EXISTS attivato_il TIMESTAMPTZ;
+    UPDATE signals SET attivato_il = created_at
+      WHERE attivato_il IS NULL AND direction IN ('BUY','SELL');
+
     ALTER TABLE setup_events DROP CONSTRAINT IF EXISTS setup_events_timeframe_check;
     ALTER TABLE setup_events ADD CONSTRAINT setup_events_timeframe_check
       CHECK (timeframe IN ('M5','M15','M30','H1'));
@@ -300,6 +318,50 @@ export async function getLatestSignal() {
   return res.rows[0] ?? null;
 }
 
+// Segnali gia' ATTIVATI e ancora aperti: sono quelli che il monitor deve
+// seguire per stop, target e scadenza.
+export async function getSegnaleAttivo() {
+  const client = getPool();
+  const res = await client.query(
+    `SELECT * FROM signals
+     WHERE is_demo = false AND direction IN ('BUY','SELL')
+       AND attivato_il IS NOT NULL AND outcome IS NULL
+     ORDER BY attivato_il DESC LIMIT 1`
+  );
+  return res.rows[0] ?? null;
+}
+
+// Segnali IN ATTESA: generati ma non ancora toccati dal prezzo. Non hanno
+// mandato notifiche e non contano come trade aperto.
+export async function getSegnaliInAttesa() {
+  const client = getPool();
+  const res = await client.query(
+    `SELECT * FROM signals
+     WHERE is_demo = false AND direction IN ('BUY','SELL')
+       AND attivato_il IS NULL AND outcome IS NULL
+     ORDER BY created_at ASC`
+  );
+  return res.rows;
+}
+
+// Il prezzo ha toccato l'entry: da qui il trade e' vivo e la notifica parte.
+export async function attivaSegnale(id: string): Promise<void> {
+  const client = getPool();
+  await client.query(`UPDATE signals SET attivato_il = now() WHERE id = $1`, [id]);
+}
+
+// Il prezzo non e' mai tornato sull'entry entro la scadenza: il segnale muore
+// senza essere mai stato un trade. Registrato come BREAKEVEN a 0R, perche'
+// non ha guadagnato ne' perso nulla -- non e' mai partito.
+export async function scadeSegnaleInAttesa(id: string, note: string): Promise<void> {
+  const client = getPool();
+  await client.query(
+    `UPDATE signals SET outcome = 'BREAKEVEN', result_r = 0, closed_at = now(),
+     reasoning = reasoning || $2 WHERE id = $1`,
+    [id, note]
+  );
+}
+
 export async function closeSignal(
   id: string,
   outcome: "WIN" | "LOSS" | "BREAKEVEN",
@@ -467,9 +529,17 @@ export async function getTickerState() {
       `SELECT xauusd, xauusd_change_pct, created_at, raw->>'xauusdQuotedAt' AS xauusd_quoted_at
        FROM market_snapshots ORDER BY created_at DESC LIMIT 1`
     ),
+    // Solo segnali GIA' ATTIVATI: il SignalWatcher del browser avvisa quando
+    // vede un id nuovo, e senza questo filtro avviserebbe alla nascita del
+    // segnale -- cioe' mentre e' ancora in attesa che il prezzo torni
+    // sull'entry, scavalcando tutto il meccanismo di attivazione. I NO_TRADE
+    // restano inclusi: hanno attivato_il NULL ma non sono trade, e servono a
+    // far vedere l'ultimo esito nel ticker.
     client.query(
       `SELECT id, direction, entry, confidence FROM signals
-       WHERE is_demo = false ORDER BY created_at DESC LIMIT 1`
+       WHERE is_demo = false
+         AND (direction = 'NO_TRADE' OR attivato_il IS NOT NULL)
+       ORDER BY created_at DESC LIMIT 1`
     ),
     client.query(
       `SELECT id, direction, entry, confidence FROM signals_5m

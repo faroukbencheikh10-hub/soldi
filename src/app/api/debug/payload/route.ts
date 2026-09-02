@@ -92,7 +92,6 @@ export async function GET(req: NextRequest) {
         scenario: nuovo.scenario,
         sintesi_d1_h4: nuovo.sintesi_d1_h4,
         candele_chiuse_recenti: {
-          m30: nuovo.candele_chiuse_recenti.m30.length,
           m15: nuovo.candele_chiuse_recenti.m15.length,
           m5: nuovo.candele_chiuse_recenti.m5.length,
         },

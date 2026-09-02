@@ -37,6 +37,22 @@ export async function POST(req: NextRequest) {
         const entry = Number(aperto.entry);
         const stopLoss = Number(aperto.stop_loss);
 
+        // Un segnale ANCORA IN ATTESA (attivato_il nullo) non e' un trade:
+        // il prezzo non ha mai toccato l'entry, quindi non c'e' nessun
+        // risultato in corso da mostrare ne' da "buttare via". Chiedere
+        // conferma con un finto R e minuti-di-vita sarebbe fuorviante -- qui
+        // basta avvisare che verra' sostituito, senza numeri inventati.
+        if (!aperto.attivato_il) {
+          return NextResponse.json({
+            ok: true,
+            skipped: true,
+            reason: "conferma_richiesta_attesa",
+            activeSignalId: aperto.id,
+            direction: aperto.direction,
+            entry,
+          });
+        }
+
         // Prezzo dall'ultimo snapshot gia' salvato: nessuna chiamata di rete
         // per una richiesta che potrebbe non concludersi in una generazione.
         const snapshot = await getLatestMarketSnapshot();
@@ -52,8 +68,10 @@ export async function POST(req: NextRequest) {
                 ((aperto.direction === "BUY" ? prezzo - entry : entry - prezzo) / rischio).toFixed(2)
               )
             : null;
+        // I minuti di vita si contano dall'ATTIVAZIONE: e' da li' che il
+        // trade esiste davvero, non dalla creazione del segnale in attesa.
         const minutiAperto = Math.round(
-          (Date.now() - new Date(aperto.created_at).getTime()) / 60000
+          (Date.now() - new Date(aperto.attivato_il).getTime()) / 60000
         );
 
         return NextResponse.json({

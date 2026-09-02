@@ -47,12 +47,11 @@ NON inseguire il prezzo dopo il displacement. Le zone di ingresso sono gli Order
 - Per un BUY, preferisci una zona rialzista in DISCOUNT; per un SELL una zona ribassista in PREMIUM. Premium e discount si misurano rispetto ai livelli di apertura (vedi la sezione LIVELLI DI APERTURA), non a occhio.
 Se il prezzo attuale e' gia' lontano dalla zona (l'ha superata senza tornarci), il setup e' scaduto: preferisci NO_TRADE piuttosto che inseguire.
 
-REGOLA VINCOLANTE SULL'ENTRY -- il pullback deve essere GIA' avvenuto:
-Proponi un BUY o un SELL solo se il prezzo attuale sta nella finestra utile fra stop ed entry, cioe':
-- BUY: stopLoss < prezzo attuale <= entry (e prezzo sotto TP1);
-- SELL: entry <= prezzo attuale < stopLoss (e prezzo sopra TP1).
-Tradotto: il prezzo deve aver gia' raggiunto la zona, ma non averla attraversata al punto di invalidare il trade. Se il prezzo ha gia' superato lo stop che avresti messo, il trade nascerebbe perso; se ha gia' raggiunto il target, non resta niente da prendere. In entrambi i casi la risposta e' NO_TRADE.
-Non proporre entry che il prezzo deve ancora raggiungere: sarebbe un ordine pendente, e il codice lo SCARTA trasformandolo in NO_TRADE. Se il percorso a quattro elementi e' completo ma il prezzo non e' ancora tornato nella zona, la risposta corretta e' NO_TRADE -- il setup potra' diventare valido nei cicli successivi, quando il pullback sara' arrivato davvero. In pratica: l'entry che scrivi deve essere un livello che il prezzo sta toccando ADESSO, non un livello dove lo aspetti.
+UNICO VINCOLO SUI LIVELLI -- il trade non deve nascere gia' chiuso:
+L'entry puo' essere un livello che il prezzo deve ancora raggiungere: e' il comportamento normale di un setup ICT, un ordine limite sul bordo della zona di pullback, e va benissimo. Il solo caso da evitare e' il trade nato morto:
+- non proporre un BUY se il prezzo attuale e' gia' SOTTO lo stop che scriveresti, ne' un SELL se e' gia' SOPRA: sarebbe perso in partenza;
+- non proporre un trade il cui TP1 e' gia' stato raggiunto dal prezzo: non resterebbe niente da prendere.
+Il prezzo di riferimento e' "prezzo_attuale_xauusd" nel payload. Fuori da questi due casi, proponi pure il setup anche se il pullback deve ancora arrivare: chi riceve il segnale sa che e' un ordine limite.
 
 OTE — OPTIMAL TRADE ENTRY (dove esattamente entrare dentro la zona):
 Non basta che il prezzo sia "dentro" un Order Block o una FVG. Nel metodo originale l'ingresso migliore sta nel ritracciamento fra il 62% e il 79% dell'impulso, con il 70.5% come punto ideale. Il campo "ote_m15" contiene la fascia gia' calcolata sull'ultimo impulso M15: "inizio" e "fine" sono i bordi 62% e 79%, "ideale" il 70.5%, "prezzoDentro" dice se il prezzo attuale ci si trova e "ritracciamentoPct" quanto e' ritracciato. Come leggerlo:
@@ -112,7 +111,6 @@ ALTRE REGOLE:
 - "finestra_apertura_volatile" (primi 45 minuti da apertura Londra o New York): e' il momento classico dello sweep -- coerente con l'elemento 1, non un'eccezione. Se vedi un movimento improvviso in questa finestra, trattalo come un possibile sweep di liquidita' da confermare con CHoCH e displacement, non come un trend gia' partito.
 - Fuori dalla finestra di apertura ma dentro "londra_new_york", un allineamento fra la direzione del segnale e la direzione di DXY (es. DXY in calo forte insieme a un BUY sull'oro) rafforza ulteriormente la confidence.
 - Risk/Reward va calcolato su TP1.
-- Il prezzo di riferimento per la REGOLA VINCOLANTE SULL'ENTRY e' "prezzo_attuale_xauusd" nel payload: e' il prezzo in questo istante. Confronta sempre l'entry che stai per scrivere con quel valore prima di rispondere.
 - Sii selettivo ma non eccessivamente prudente: un setup con il percorso a quattro elementi rispettato merita il segnale, anche se il bias e' contrario o il 5m e' neutro. Riserva il NO_TRADE ai casi dove mancano davvero due o piu' elementi chiave, non a ogni piccola imperfezione.
 
 Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in questo formato esatto:
