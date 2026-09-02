@@ -4,17 +4,23 @@ const SYMBOL = process.env.METAAPI_SYMBOL_XAUUSD || "XAUUSD";
 
 const RAW_REGION = process.env.METAAPI_REGION;
 
+// Regioni da provare, in ordine.
+//
+// Se METAAPI_REGION e' impostata si usa SOLO quella. Prima le altre venivano
+// aggiunte comunque in coda, e quando la regione buona falliva per un motivo
+// qualsiasi (lentezza, errore momentaneo) il codice ripiegava su regioni dove
+// l'account NON esiste. MetaApi conta quelle come "richieste verso account
+// inesistenti o non attivi nella regione interrogata" e risponde 429: un
+// intoppo passeggero si trasformava cosi' in un rate limit, con caduta sul
+// fallback Twelve Data.
+//
+// Senza la variabile impostata resta la ricerca a tentativi, che serve al
+// primo avvio per scoprire la regione giusta.
 function regionCandidates(): string[] {
-  const candidati: string[] = [];
   const raw = RAW_REGION?.trim().toLowerCase();
+  if (raw) return [raw];
 
-  if (raw) candidati.push(raw);
-
-  for (const r of ["backup-new-york", "new-york", "london"]) {
-    if (!candidati.includes(r)) candidati.push(r);
-  }
-
-  return candidati;
+  return ["backup-new-york", "new-york", "london"];
 }
 
 let regioneConfermata: string | null = null;
@@ -26,8 +32,18 @@ function marketDataApiBase(region: string) {
   return `https://mt-market-data-client-api-v1.${region}.agiliumtrade.ai`;
 }
 
+// Errore che indica "questo account non vive in questa regione": ha senso
+// provare la regione successiva.
+//
+// NON include il 429: un rate limit non dice niente sulla regione, dice che
+// stiamo chiedendo troppo. Provare un'altra regione mentre si e' limitati
+// aggiunge richieste proprio quando MetaApi ne sta gia' rifiutando -- e le
+// regioni alternative sono quelle dove l'account non esiste, cioe' esattamente
+// le chiamate che hanno fatto scattare il limite. Su 429 si esce subito e si
+// lascia lavorare il fallback Twelve Data.
 function isRegionMismatch(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("429")) return false;
   return (
     msg.includes("ENOTFOUND") ||
     msg.includes("fetch failed") ||
@@ -76,13 +92,19 @@ async function metaApiGet(url: string, timeoutMs = METAAPI_TIMEOUT_MS): Promise<
 
 async function metaApiGetWithRegion(buildUrl: (region: string) => string): Promise<unknown> {
   const candidati = regioneConfermata ? [regioneConfermata] : regionCandidates();
+  // Con una sola candidata non c'e' nessuna "scoperta" da annunciare: e' la
+  // regione configurata, e loggarla a ogni avvio a freddo riempiva i log
+  // facendo sembrare che la variabile non fosse impostata.
+  const daScoprire = candidati.length > 1;
   let ultimoErrore: unknown = null;
 
   for (const region of candidati) {
     try {
       const data = await metaApiGet(buildUrl(region));
       if (regioneConfermata !== region) {
-        console.log(`[metaApiData] regione MetaApi funzionante: ${region}`);
+        if (daScoprire) {
+          console.log(`[metaApiData] regione MetaApi trovata per tentativi: ${region} (imposta METAAPI_REGION per evitare la ricerca)`);
+        }
         regioneConfermata = region;
       }
       return data;
