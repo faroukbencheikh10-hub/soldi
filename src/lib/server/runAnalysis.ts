@@ -920,9 +920,17 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
     if (!eseguibile) {
       const distanza = Math.abs(entrySegnale - prezzoOra).toFixed(2);
+      // Livelli azzerati insieme alla direzione: un NO_TRADE che mostra ancora
+      // entry, stop e target sembra un trade da eseguire, ed e' esattamente il
+      // fraintendimento che questa regola doveva evitare.
       signal = validateSignal({
         ...rawSignal,
         direction: "NO_TRADE",
+        entry: 0,
+        stopLoss: 0,
+        tp1: 0,
+        tp2: 0,
+        riskReward: 0,
         reasoning:
           `${rawSignal.reasoning ?? ""}\n\n[Scartato: il segnale ${signal.direction} aveva entry ` +
           `${entrySegnale.toFixed(2)} con prezzo ${Number(prezzoOra).toFixed(2)} (${distanza} di ` +
