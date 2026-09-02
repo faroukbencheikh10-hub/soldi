@@ -300,25 +300,6 @@ export async function getLatestSignal() {
   return res.rows[0] ?? null;
 }
 
-// Tutti i trade ancora aperti, dal piu' vecchio al piu' recente.
-//
-// Serve da quando un trade aperto non blocca piu' la generazione del segnale
-// successivo (01/09): da quel momento possono coesistere piu' trade aperti, e
-// seguire solo l'ultimo li lascerebbe orfani -- mai chiusi, outcome NULL per
-// sempre, statistiche falsate in silenzio. Qui vengono restituiti tutti,
-// cosi' ognuno viene seguito e chiuso per conto suo.
-export async function getSegnaliAperti() {
-  const client = getPool();
-  const res = await client.query(
-    `SELECT * FROM signals
-     WHERE is_demo = false
-       AND direction IN ('BUY','SELL')
-       AND outcome IS NULL
-     ORDER BY created_at ASC`
-  );
-  return res.rows;
-}
-
 export async function closeSignal(
   id: string,
   outcome: "WIN" | "LOSS" | "BREAKEVEN",

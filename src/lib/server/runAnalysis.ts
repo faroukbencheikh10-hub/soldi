@@ -4,7 +4,6 @@ import {
   insertMarketSnapshot,
   insertContextSnapshot,
   getLatestSignal,
-  getSegnaliAperti,
   closeSignal,
   insertSignal5m,
   getLatestSignal5m,
@@ -44,7 +43,6 @@ import {
   comprimiContesto,
   firmaContesto,
   calcolaTransizione,
-  rilevaRangeAccumulo,
   type EventoContesto,
   type ContestoCompresso,
 } from "@/lib/server/marketContext";
@@ -335,11 +333,13 @@ async function avvisaNotizia(
 
 // NOTIFICHE A META' TRADE — RIMOSSE (02/09)
 //
-// Qui c'era avvisaParziale: un push a +1R che suggeriva di chiudere meta'
-// posizione e portare lo stop a pareggio. Rimosso su richiesta: le uniche
-// notifiche che restano sono quella del NUOVO SEGNALE (una sola per segnale)
-// e l'avviso di notizia macro imminente. Nessun avviso arriva piu' a trade
-// gia' aperto, e nessun segnale puo' notificare due volte.
+// Qui c'era avvisaParziale: un push a +1R che, su un trade gia' aperto,
+// suggeriva di chiudere meta' posizione e portare lo stop a pareggio.
+// Rimosso su richiesta: nessuna notifica deve piu' arrivare a trade in
+// corso, e nessun segnale deve poter notificare due volte.
+//
+// Restano solo due notifiche, entrambe una tantum: il NUOVO SEGNALE e
+// l'avviso di notizia macro imminente.
 //
 // La gestione del trade avviene comunque a mano sul broker: l'app resta un
 // generatore di segnali, non un gestore di posizioni.
@@ -363,9 +363,6 @@ export async function runAnalysis(options?: { force?: boolean }) {
     !inPausa && (await getSetting("ai_refresh_al_risveglio")) === "true";
 
   const latest = await getLatestSignal();
-  // Tutti i trade ancora aperti, non solo l'ultimo: da quando la generazione
-  // non e' piu' bloccata possono essercene diversi contemporaneamente.
-  const apertiIniziali = await getSegnaliAperti();
   const hasOpenTrade =
     latest && (latest.direction === "BUY" || latest.direction === "SELL") && !latest.outcome;
 
@@ -378,82 +375,76 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   let expired = false;
 
-  // ============ SORVEGLIANZA DEI TRADE APERTI ============================
-  // Da quando un trade aperto non blocca piu' la generazione (01/09) possono
-  // coesistere piu' trade aperti insieme. Vanno seguiti TUTTI: seguire solo
-  // l'ultimo lascerebbe i precedenti orfani, mai chiusi, con outcome NULL per
-  // sempre e le statistiche falsate in silenzio.
-  //
-  // Per ognuno, a ogni ciclo: si controlla se stop o target sono stati
-  // toccati (prima dalle candele, poi dal prezzo dell'istante), parte
-  // l'avviso a +1R, e si applica la scadenza. La gestione vera avviene
-  // comunque a mano sul broker: qui si misura soltanto.
-  if (apertiIniziali.length > 0) {
+  if (hasOpenTrade) {
     currentPrice = await getCurrentPrice();
+    entry = Number(latest.entry);
+    stopLoss = Number(latest.stop_loss);
+    tp1 = Number(latest.tp1);
+    risk = Math.abs(entry - stopLoss);
 
-    for (const aperto of apertiIniziali) {
-      const eEntry = Number(aperto.entry);
-      const eStop = Number(aperto.stop_loss);
-      const eTp1 = Number(aperto.tp1);
-      const eRisk = Math.abs(eEntry - eStop);
-      if (!Number.isFinite(eEntry) || !Number.isFinite(eStop) || !Number.isFinite(eTp1)) continue;
+    // Prima fonte: le candele dall'apertura del trade in poi.
+    naturalOutcome = await esitoDalleCandele(latest.direction, latest.created_at, stopLoss, tp1);
 
-      // Prima fonte: le candele dall'apertura del trade in poi.
-      let esito = await esitoDalleCandele(aperto.direction, aperto.created_at, eStop, eTp1);
-
-      // Ripiego sul prezzo dell'istante solo se le candele non sono disponibili.
-      if (esito === null && currentPrice !== null) {
-        if (aperto.direction === "BUY") {
-          if (currentPrice <= eStop) esito = "LOSS";
-          else if (currentPrice >= eTp1) esito = "WIN";
-        } else {
-          if (currentPrice >= eStop) esito = "LOSS";
-          else if (currentPrice <= eTp1) esito = "WIN";
-        }
+    // Ripiego sul prezzo dell'istante solo se le candele non sono disponibili.
+    if (naturalOutcome === null && currentPrice !== null) {
+      if (latest.direction === "BUY") {
+        if (currentPrice <= stopLoss) naturalOutcome = "LOSS";
+        else if (currentPrice >= tp1) naturalOutcome = "WIN";
+      } else {
+        if (currentPrice >= stopLoss) naturalOutcome = "LOSS";
+        else if (currentPrice <= tp1) naturalOutcome = "WIN";
       }
+    }
 
-      if (esito) {
-        // Una vincita vale esattamente la distanza fino a TP1, non la posizione
-        // casuale del prezzo nel momento in cui il cron se ne accorge.
-        const resultR = esito === "WIN" && eRisk > 0 ? Math.abs(eTp1 - eEntry) / eRisk : -1;
-        await closeSignal(aperto.id, esito, resultR);
-        if (String(aperto.id) === String(latest?.id)) naturalOutcome = esito;
-        continue;
-      }
-
+    if (naturalOutcome) {
+      // Una vincita vale esattamente la distanza fino a TP1, non la posizione
+      // casuale del prezzo nel momento in cui il cron se ne accorge.
+      const resultR = naturalOutcome === "WIN" && risk > 0 ? Math.abs(tp1 - entry) / risk : -1;
+      await closeSignal(latest.id, naturalOutcome, resultR);
+    } else {
       // Il prezzo non ha ancora toccato ne' stop ne' target: nessuna
-      // notifica a trade aperto, si continua solo a misurare.
+      // notifica parte a trade aperto, si continua solo a misurare.
 
-      const ageMs = Date.now() - new Date(aperto.created_at).getTime();
-      const scaduto = ageMs > SIGNAL_TIMEOUT_MS;
-      if (String(aperto.id) === String(latest?.id)) {
-        entry = eEntry;
-        stopLoss = eStop;
-        tp1 = eTp1;
-        risk = eRisk;
-        expired = scaduto;
-      }
+      const ageMs = Date.now() - new Date(latest.created_at).getTime();
+      expired = ageMs > SIGNAL_TIMEOUT_MS;
 
-      if (scaduto) {
-        // Alla scadenza si registra il risultato vero al momento della
-        // chiusura: l'esito resta BREAKEVEN perche' ne' stop ne' target sono
+      if (expired) {
+        // Prima la scadenza registrava sempre 0, anche su un trade che era a
+        // +0,9R: i vincitori venivano tagliati e le statistiche sottostimavano
+        // la strategia. Ora si registra il risultato vero al momento della
+        // chiusura. L'esito resta BREAKEVEN perche' ne' stop ne' target sono
         // stati toccati, ma il risultato in R e' quello reale.
         const resultR =
-          currentPrice !== null && eRisk > 0
+          currentPrice !== null && risk > 0
             ? Number(
-                ((aperto.direction === "BUY" ? currentPrice - eEntry : eEntry - currentPrice) / eRisk).toFixed(2)
+                ((latest.direction === "BUY" ? currentPrice - entry : entry - currentPrice) / risk).toFixed(2)
               )
             : 0;
         await closeSignal(
-          aperto.id,
+          latest.id,
           "BREAKEVEN",
           resultR,
           `\n\n[Scaduto: nessun SL/TP toccato entro 4 ore. Chiuso al prezzo corrente, risultato reale ${resultR}R.]`
         );
+      } else if (!force) {
+        try {
+          const freshSnapshot = await getMarketSnapshot();
+          await insertMarketSnapshot(freshSnapshot);
+        } catch (err) {
+          console.error("[runAnalysis] snapshot di aggiornamento (trade aperto) fallito:", err);
+        }
+
+        return {
+          skipped: true,
+          reason: "signal_active",
+          activeSignalId: latest.id,
+          direction: latest.direction,
+          entry: currentPrice !== null ? entry : Number(latest.entry),
+          currentPrice: currentPrice ?? undefined,
+        };
       }
     }
   }
-  // ============ fine SORVEGLIANZA ========================================
 
   const marketSnapshot = await getMarketSnapshot();
 
@@ -795,34 +786,8 @@ export async function runAnalysis(options?: { force?: boolean }) {
   // Filtro tecnico locale: se non c'e' nulla di interessante sul grafico non
   // chiamiamo l'AI (risparmio credito). La generazione manuale (force) passa
   // sempre, e il ciclo viene comunque registrato come NO_TRADE con la ragione.
-  // Range di accumulo (senso ICT): pool di liquidita' su entrambi i lati,
-  // nessuna rottura in corso, prezzo al centro. I livelli uguali di
-  // riferimento sono quelli M30; la rottura viene pero' cercata su tutti e
-  // tre i timeframe operativi, cosi' il piu' veloce sblocca subito.
-  const rangeAccumulo = rilevaRangeAccumulo(
-    marketSnapshot.xauusd,
-    marketSnapshot.ictLivelliUgualiM30,
-    [
-      {
-        timeframe: "M30",
-        evento: marketSnapshot.ictStrutturaM30?.evento ?? null,
-        displacementInAtr: marketSnapshot.rigetto30m?.ampiezzaImpulsoInAtr ?? null,
-      },
-      {
-        timeframe: "M15",
-        evento: marketSnapshot.ictStrutturaM15?.evento ?? null,
-        displacementInAtr: marketSnapshot.rigetto15m?.ampiezzaImpulsoInAtr ?? null,
-      },
-      {
-        timeframe: "M5",
-        evento: marketSnapshot.ictStrutturaM5?.evento ?? null,
-        displacementInAtr: marketSnapshot.rigetto5m?.ampiezzaImpulsoInAtr ?? null,
-      },
-    ]
-  );
-
   const setupTecnico = hasTechnicalSetup(
-    { ...marketSnapshot, rangeAccumulo },
+    marketSnapshot,
     marketSnapshot.xauusd,
     SOGLIA_SETUP_ORO,
     eventiAttivi
