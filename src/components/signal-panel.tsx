@@ -1,60 +1,12 @@
 import { TradeSignal } from "@/lib/types";
-import { TrendingUp, TrendingDown, CircleSlash, ShieldAlert, XCircle } from "lucide-react";
+import { TrendingUp, TrendingDown, CircleSlash, ShieldAlert } from "lucide-react";
 import { formatRecency } from "@/lib/formatTime";
 
-// L'entry di un segnale e' il bordo della zona di pullback, non un "entra
-// adesso". Di questo riquadro resta visibile un solo caso: "Pullback
-// saltato", cioe' quando il prezzo si e' allontanato dalla zona senza
-// tornarci e inseguirlo sarebbe un errore. Negli altri casi non mostra nulla.
-const INGRESSO_SUPERATO_ATR = 1;
-
-function StatoIngresso({
-  signal,
-  prezzoCorrente,
-  atr,
-}: {
-  signal: TradeSignal;
-  prezzoCorrente: number | null;
-  atr: number | null;
-}) {
-  if (signal.direction === "NO_TRADE" || signal.outcome) return null;
-  if (prezzoCorrente === null || !Number.isFinite(prezzoCorrente)) return null;
-
-  const entry = signal.entry;
-  const distanza = Math.abs(entry - prezzoCorrente);
-  const distanzaInAtr = atr !== null && atr > 0 ? distanza / atr : null;
-  const raggiunto = signal.direction === "BUY" ? prezzoCorrente <= entry : prezzoCorrente >= entry;
-  const superato = !raggiunto && distanzaInAtr !== null && distanzaInAtr > INGRESSO_SUPERATO_ATR;
-
-  const dettaglio = `prezzo ${prezzoCorrente.toFixed(2)} · ${distanza.toFixed(2)} di distanza${
-    distanzaInAtr !== null ? ` (${distanzaInAtr.toFixed(2)} ATR)` : ""
-  }`;
-
-  // Riquadro verde "Eseguibile ora" rimosso su richiesta: quando il prezzo
-  // ha raggiunto la zona non si mostra nulla. Resta solo l'avviso di
-  // "Pullback saltato", che segnala un caso da NON inseguire.
-  if (raggiunto) return null;
-
-  if (superato) {
-    return (
-      <div className="mb-3 rounded-lg border border-border bg-panel2 px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <XCircle size={14} className="text-muted shrink-0" />
-          <span className="text-xs font-semibold text-muted leading-none">Pullback saltato</span>
-        </div>
-        <p className="text-[11px] text-muted mt-1.5 leading-snug">
-          Il prezzo si e&apos; allontanato dalla zona senza tornarci — {dettaglio}. Inseguire
-          qui significa entrare con lo stop gia&apos; quasi consumato.
-        </p>
-      </div>
-    );
-  }
-
-  // Stato "in attesa" (il vecchio riquadro giallo "Ordine pendente") rimosso
-  // su richiesta: quando il prezzo non ha ancora raggiunto la zona e non se
-  // n'e' allontanato troppo, non si mostra nulla.
-  return null;
-}
+// Riquadro di stato dell'ingresso: RIMOSSO (02/09).
+//
+// Non serve piu': da questa versione il sistema emette solo segnali gia'
+// eseguibili al prezzo corrente, quindi non esistono piu' ordini pendenti
+// da segnalare ne' pullback da inseguire.
 
 // ---------------------------------------------------------------------------
 // FINESTRA DI CHIUSURA ATTESA
@@ -198,7 +150,6 @@ export function SignalPanel({
         </div>
       </div>
 
-      <StatoIngresso signal={signal} prezzoCorrente={prezzoCorrente} atr={atr} />
       <ChiusuraAttesa signal={signal} />
 
       <div className="grid grid-cols-3 gap-2 mb-3">

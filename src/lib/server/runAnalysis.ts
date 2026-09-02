@@ -894,7 +894,43 @@ export async function runAnalysis(options?: { force?: boolean }) {
     eventiAttivi: eventiPerContesto,
     scenario: await scenarioCorrente(adesso),
   });
-  const signal = validateSignal(rawSignal);
+  let signal = validateSignal(rawSignal);
+
+  // NIENTE ORDINI PENDENTI (02/09).
+  //
+  // L'entry di un setup ICT e' il bordo della zona di pullback, e puo' stare
+  // lontano dal prezzo: il 02/09 un SELL aveva entry 4312.20 con il prezzo a
+  // 4302.68, cioe' un limite che poteva non arrivare mai. Un segnale del
+  // genere non e' eseguibile nel momento in cui arriva la notifica, e chi lo
+  // esegue a mercato parte con gran parte dello stop gia' bruciata.
+  //
+  // Da qui in poi si emettono SOLO segnali gia' eseguibili: il prezzo deve
+  // aver raggiunto la zona di ingresso (sotto l'entry per un BUY, sopra per
+  // un SELL). Gli altri diventano NO_TRADE con la ragione scritta nello
+  // storico, cosi' resta traccia di quanti e quali sono stati scartati.
+  if (signal.direction === "BUY" || signal.direction === "SELL") {
+    const prezzoOra = marketSnapshot.xauusd;
+    const entrySegnale = Number(signal.entry);
+    const eseguibile =
+      Number.isFinite(prezzoOra) && Number.isFinite(entrySegnale)
+        ? signal.direction === "BUY"
+          ? prezzoOra <= entrySegnale
+          : prezzoOra >= entrySegnale
+        : false;
+
+    if (!eseguibile) {
+      const distanza = Math.abs(entrySegnale - prezzoOra).toFixed(2);
+      signal = validateSignal({
+        ...rawSignal,
+        direction: "NO_TRADE",
+        reasoning:
+          `${rawSignal.reasoning ?? ""}\n\n[Scartato: il segnale ${signal.direction} aveva entry ` +
+          `${entrySegnale.toFixed(2)} con prezzo ${Number(prezzoOra).toFixed(2)} (${distanza} di ` +
+          `distanza). Sarebbe stato un ordine pendente, non un trade eseguibile ora.]`,
+      } as typeof rawSignal);
+    }
+  }
+
   const saved = await insertSignal(signal);
   await setSetting("setup_last_signal_id", saved.id);
 
@@ -909,8 +945,15 @@ export async function runAnalysis(options?: { force?: boolean }) {
       marketSnapshot.atr15m ?? null
     );
 
+    // Il TITOLO deve dire subito se il trade e' eseguibile o e' un limite da
+    // piazzare. Prima diceva solo "Nuovo segnale: SELL": sul telefono si legge
+    // il titolo e si entra a mercato, ma l'entry e' il bordo di una zona di
+    // pullback e puo' stare parecchio lontano dal prezzo. Il 02/09 un SELL
+    // aveva entry 4312.20 con prezzo a 4302.68 -- quasi dieci dollari, contro
+    // uno stop di 10.80: entrare a mercato avrebbe significato partire con
+    // quasi tutto lo stop gia' bruciato.
     sendPushToAll({
-      title: `Nuovo segnale: ${signal.direction}`,
+      title: `Nuovo segnale: ${signal.direction} · eseguibile ora`,
       body: `${ingresso.testo} · SL ${Number(signal.stopLoss).toFixed(2)} · TP1 ${Number(
         signal.tp1
       ).toFixed(2)} · Conf ${signal.confidence}%`,
