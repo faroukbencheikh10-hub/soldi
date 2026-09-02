@@ -333,62 +333,16 @@ async function avvisaNotizia(
   return true;
 }
 
-// Avviso di GESTIONE a +1R.
+// NOTIFICHE A META' TRADE — RIMOSSE (02/09)
 //
-// Sui dati reali il TP1 arriva in media dopo 1h40, ma con una coda lunga: dei
-// venti trade che l'hanno raggiunto, otto entro un'ora, tredici entro due,
-// venti entro quattro. Chiudere a mano dopo un'ora taglia piu' della meta'
-// dei vincitori -- ed e' esattamente quello che succedeva, perche' l'attesa
-// avveniva a rischio pieno.
+// Qui c'era avvisaParziale: un push a +1R che suggeriva di chiudere meta'
+// posizione e portare lo stop a pareggio. Rimosso su richiesta: le uniche
+// notifiche che restano sono quella del NUOVO SEGNALE (una sola per segnale)
+// e l'avviso di notizia macro imminente. Nessun avviso arriva piu' a trade
+// gia' aperto, e nessun segnale puo' notificare due volte.
 //
-// Portare lo stop a pareggio dopo un parziale rende l'attesa gratuita: da li'
-// in poi il trade non puo' piu' perdere, e le ore successive non costano
-// niente. L'esecuzione e' manuale (l'app non manda ordini al broker): questo
-// e' solo l'avviso che il livello e' stato raggiunto.
-//
-// Parte una volta sola per segnale. Non serve nessuna guardia sull'ingresso:
-// arrivare a +1R implica che il prezzo ha gia' superato l'entry.
-const SOGLIA_PARZIALE_R = 1;
-
-async function avvisaParziale(
-  segnale: { id: string | number; direction: string; entry: unknown; stop_loss: unknown; tp1: unknown },
-  prezzo: number | null
-): Promise<boolean> {
-  if (prezzo === null || !Number.isFinite(prezzo)) return false;
-  if (segnale.direction !== "BUY" && segnale.direction !== "SELL") return false;
-
-  const entry = Number(segnale.entry);
-  const stopLoss = Number(segnale.stop_loss);
-  const rischio = Math.abs(entry - stopLoss);
-  if (!Number.isFinite(entry) || !Number.isFinite(stopLoss) || rischio <= 0) return false;
-
-  const guadagnoR =
-    (segnale.direction === "BUY" ? prezzo - entry : entry - prezzo) / rischio;
-  if (guadagnoR < SOGLIA_PARZIALE_R) return false;
-
-  // Una chiave PER SEGNALE, non una sola condivisa.
-  //
-  // Con una chiave unica ("parziale_avvisato_signal_id") e piu' trade aperti
-  // insieme, i segnali se la sovrascrivevano a vicenda: A notificava e
-  // scriveva il proprio id, poi B lo sostituiva, poi A non si riconosceva
-  // piu' e rinotificava, all'infinito. Con una chiave per id ogni trade
-  // ricorda per conto suo di aver gia' avvisato.
-  const chiave = `parziale_avvisato_${segnale.id}`;
-  const gia = await getSetting(chiave);
-  if (gia === "true") return false;
-  await setSetting(chiave, "true");
-
-  sendPushToAll({
-    title: `+${guadagnoR.toFixed(1)}R · chiudi meta' e stop a pareggio`,
-    body: `${segnale.direction} da ${entry.toFixed(2)}, prezzo ${prezzo.toFixed(2)}. Sposta lo stop a ${entry.toFixed(
-      2
-    )}: da qui in poi il trade non puo' piu' perdere. TP1 ${Number(segnale.tp1).toFixed(2)}.`,
-    url: "/",
-    tag: "parziale-1r",
-  }).catch((err) => console.error("[runAnalysis] avviso parziale fallito:", err));
-
-  return true;
-}
+// La gestione del trade avviene comunque a mano sul broker: l'app resta un
+// generatore di segnali, non un gestore di posizioni.
 
 export async function runAnalysis(options?: { force?: boolean }) {
   const force = options?.force ?? false;
@@ -467,8 +421,8 @@ export async function runAnalysis(options?: { force?: boolean }) {
         continue;
       }
 
-      // Il prezzo non ha ancora toccato ne' stop ne' target.
-      await avvisaParziale(aperto, currentPrice);
+      // Il prezzo non ha ancora toccato ne' stop ne' target: nessuna
+      // notifica a trade aperto, si continua solo a misurare.
 
       const ageMs = Date.now() - new Date(aperto.created_at).getTime();
       const scaduto = ageMs > SIGNAL_TIMEOUT_MS;
