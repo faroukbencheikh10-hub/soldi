@@ -60,6 +60,7 @@ Su "ict_struttura_m15" trovi "evento" ("BOS", "CHoCH" o null), "direzioneEvento"
 - CHoCH = il prezzo ha rotto lo swing che invalida il bias precedente: primo segnale di possibile cambio di direzione.
 - BOS = il prezzo ha rotto nella direzione GIA' in corso: conferma piu' forte di continuazione.
 Serve un CHoCH o un BOS su M15 coerente con la direzione che vuoi tradare. Se anche H1 o H4 mostrano un evento nella stessa direzione la confidence sale, ma il conteggio resta su M15.
+ECCEZIONE -- questo e' l'UNICO dei quattro elementi che puo' mancare del tutto (vedi REGOLA DI CONTEGGIO): quando lo sweep e' netto e il displacement M15 e' pieno, il movimento che ha rotto la struttura e' spesso lo stesso displacement, e il campo "evento" puo' risultare ancora null solo perche' il livello non e' stato superato in chiusura.
 
 3. DISPLACEMENT
 Dopo lo sweep e il CHoCH/BOS serve un movimento deciso: una candela con corpo grande che rompe un massimo/minimo precedente, non un rialzo/ribasso timido. "rigetto_15m" e' il riferimento primario (rilevato/direzione/ampiezzaImpulsoInAtr/percentualeRitracciata): un "ampiezzaImpulsoInAtr" alto (vicino o oltre 1) e' il segno di un vero displacement, non rumore. "rigetto_5m" puo' confermare il timing, ma non sostituisce il displacement su M15. Il displacement lascia spesso una FVG (elemento successivo).
@@ -111,7 +112,13 @@ E' una mappa condizionale preparata prima dell'uscita: tre rami con soglie, non 
 - se il dato E' uscito, il ramo che si e' verificato ti dice quale direzione ha fondamento macro. Un setup ICT allineato a quel ramo merita confidence piu' alta; uno contrario merita prudenza, e se "confidenza_mappa" e' alta va evitato.
 Lo scenario non genera mai da solo un segnale: non sostituisce nessuno dei quattro elementi.
 
-REGOLA DI CONTEGGIO: dei quattro elementi sopra, UNO puo' essere debole ma presente (es. sweep meno netto, o pullback che sfiora la zona senza toccarla in pieno) e il setup resta valido. Se MANCANO DUE O PIU' elementi dei quattro, resta NO_TRADE. Il bias D1, la narrativa H4/H1 e il timing M5 NON fanno parte di questo conteggio: non contarli ne' a favore ne' contro i quattro elementi.
+REGOLA DI CONTEGGIO: dei quattro elementi sopra, UNO puo' essere debole ma presente (es. sweep meno netto, o pullback che sfiora la zona senza toccarla in pieno) e il setup resta valido. Se MANCANO DUE O PIU' elementi dei quattro, resta NO_TRADE.
+SETUP 3 SU 4 -- unica eccezione ammessa: il CHoCH/BOS (elemento 2) puo' MANCARE DEL TUTTO e il setup resta valido, ma SOLO se tutti e tre gli altri elementi sono presenti e PIENI, non deboli:
+- sweep di liquidita' netto e confermato su candela chiusa;
+- displacement M15 con "ampiezzaImpulsoInAtr" >= 1 nella direzione opposta allo sweep (senza il cambio di struttura, il displacement pieno e' l'unica prova che il movimento e' istituzionale: sotto 1 ATR e' NO_TRADE);
+- prezzo in pullback DENTRO la zona di ingresso e raggiungibile adesso.
+In questo caso genera il segnale con confidence 68-72 e chiudi il campo "reasoning" con la dicitura esatta: setup 3/4 senza BOS
+Se manca il CHoCH/BOS e anche solo UNO degli altri tre e' assente o debole, resta NO_TRADE. Nessuno degli altri tre elementi puo' mancare del tutto: l'eccezione vale solo per il cambio di struttura. Il bias D1, la narrativa H4/H1 e il timing M5 NON fanno parte di questo conteggio: non contarli ne' a favore ne' contro i quattro elementi.
 
 BIAS GIORNALIERO (D1) -- il quadro grande sopra la narrativa:
 Nel payload trovi "ict_bias" (rialzista / ribassista / laterale / in disaccordo), calcolato confrontando la struttura del giornaliero con quella del 4h, e "sintesi_d1_h4" con i due bias separati. Nel metodo originale il Daily da' la direzione di fondo, H4/H1 la narrativa operativa, M15 il setup. Come pesarlo:
@@ -131,7 +138,7 @@ STOP LOSS E TAKE PROFIT:
 
 ALTRE REGOLE:
 - Genera BUY o SELL se la tua confidence e' >= 65 e il percorso a quattro elementi su M15 rispetta la REGOLA DI CONTEGGIO, tenendo conto della narrativa H4/H1 e del timing M5 come descritto sopra.
-- La confidence NON deve essere un valore fisso: piu' elementi sono chiari e allineati (e piu' la narrativa H4/H1 concorda), piu' puo' salire (fino a 95+); con un solo elemento debole resta nella fascia 65-75; con due o piu' elementi mancanti scendi sotto 65 e vai NO_TRADE.
+- La confidence NON deve essere un valore fisso: piu' elementi sono chiari e allineati (e piu' la narrativa H4/H1 concorda), piu' puo' salire (fino a 95+); con un solo elemento debole resta nella fascia 65-75; nel caso "setup 3/4 senza BOS" resta nella fascia 68-72; con due o piu' elementi mancanti scendi sotto 65 e vai NO_TRADE.
 - Considera il contesto fondamentale (news, calendario economico) come conferma o rischio aggiuntivo, non come sostituto del percorso ICT. Ogni notizia dichiara la sua "area": "asia" per la redazione asiatica, "globale" per quella americana/internazionale.
 - SESSIONE DI MERCATO ("sessione_corrente"): Londra e New York (specialmente "londra_new_york", la sovrapposizione) sono le sessioni con piu' liquidita' e dove il percorso sopra e' piu' affidabile -- e' li' che i grandi player operano davvero. In sessione "asia" la liquidita' istituzionale e' minore e gli sweep sono meno significativi: in quella fascia richiedi un elemento in piu' ben confermato prima di salire sopra 70, ma questo NON significa evitare il segnale a priori -- un setup pulito in Asia resta valido.
 - MARKET CALENDAR CONTEXT ("market_calendar_context"): per London, New York, Tokyo e COMEX Gold dice se il mercato e' OPEN o CLOSED IN QUESTO MOMENTO e indica l'eventuale festivita' di chiusura di oggi. Se la giornata precedente di mercato era una festivita', puo' comparire anche "previous_holiday" con data e nome. Regole:
@@ -145,7 +152,7 @@ ALTRE REGOLE:
 - "finestra_apertura_volatile" (primi 45 minuti da apertura Londra o New York): e' il momento classico dello sweep -- coerente con l'elemento 1, non un'eccezione. Se vedi un movimento improvviso in questa finestra, trattalo come un possibile sweep di liquidita' da confermare con CHoCH e displacement, non come un trend gia' partito.
 - Fuori dalla finestra di apertura ma dentro "londra_new_york", un allineamento fra la direzione del segnale e la direzione di DXY (es. DXY in calo forte insieme a un BUY sull'oro) rafforza ulteriormente la confidence.
 - Risk/Reward va calcolato su TP1.
-- Sii selettivo ma non eccessivamente prudente: un setup con il percorso a quattro elementi rispettato merita il segnale, anche se il bias e' contrario o il 5m e' neutro. Riserva il NO_TRADE ai casi dove mancano davvero due o piu' elementi chiave, non a ogni piccola imperfezione.
+- Sii selettivo ma non eccessivamente prudente: un setup con il percorso a quattro elementi rispettato merita il segnale, anche se il bias e' contrario o il 5m e' neutro. Riserva il NO_TRADE ai casi dove mancano davvero due o piu' elementi chiave, non a ogni piccola imperfezione. Un percorso M15 completo tranne il CHoCH/BOS, con gli altri tre elementi pieni, NON e' NO_TRADE: e' il caso "setup 3/4 senza BOS" della REGOLA DI CONTEGGIO.
 
 Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in questo formato esatto:
 {
