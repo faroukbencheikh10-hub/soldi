@@ -1156,17 +1156,35 @@ export async function runAnalysis(options?: { force?: boolean }) {
   await setSetting("setup_last_signal_id", saved.id);
 
   if (signal.direction === "BUY" || signal.direction === "SELL") {
-    // NESSUNA NOTIFICA ALLA NASCITA (02/09).
+    // NOTIFICA IMMEDIATA ALLA NASCITA (03/09) -- sistema pendente RIMOSSO.
     //
-    // Il segnale nasce IN ATTESA: l'entry e' il bordo della zona di pullback
-    // e il prezzo spesso deve ancora tornarci. Avvisare adesso significava
-    // mandare un trade non eseguibile, con il prezzo che nel frattempo si
-    // muove. La notifica parte ora dal blocco di ATTIVAZIONE, nel ciclo in
-    // cui il prezzo tocca davvero l'entry -- una sola, nel momento giusto.
+    // Per un giorno il segnale nasceva IN ATTESA e la notifica partiva solo
+    // al tocco dell'entry. L'intento era non registrare come vinti o persi
+    // trade mai eseguiti, ma il rimedio era peggiore del male: un segnale in
+    // attesa bloccava la generazione di nuovi segnali, e il sistema e'
+    // rimasto muto 75 minuti mentre il prezzo si muoveva di 18 dollari nella
+    // direzione opposta.
+    //
+    // Chi opera con ordini limite non ha bisogno di quell'attesa: ricevere
+    // subito entry, stop e target permette di piazzare l'ordine sul broker e
+    // lasciare che sia lui ad aspettare il prezzo. Il segnale nasce quindi
+    // gia' attivo (attivato_il e' scritto dentro l'INSERT, vedi
+    // insertSignal) e la notifica parte adesso.
+    const prezzoOra = Number(marketSnapshot.xauusd);
+    sendPushToAll({
+      title: `${signal.direction} · prezzo ${prezzoOra.toFixed(2)}`,
+      body: `Entry ${Number(signal.entry).toFixed(2)} · SL ${Number(signal.stopLoss).toFixed(
+        2
+      )} · TP1 ${Number(signal.tp1).toFixed(2)} · TP2 ${Number(signal.tp2).toFixed(
+        2
+      )} · Conf ${signal.confidence}%`,
+      url: "/",
+    }).catch((err) => console.error("[runAnalysis] invio push fallito:", err));
+
     console.log(
-      `[runAnalysis] segnale ${saved.id} creato in attesa: ${signal.direction} entry ${Number(
+      `[runAnalysis] segnale ${saved.id} creato e notificato: ${signal.direction} entry ${Number(
         signal.entry
-      ).toFixed(2)}, prezzo ${Number(marketSnapshot.xauusd).toFixed(2)}`
+      ).toFixed(2)}, prezzo ${prezzoOra.toFixed(2)}`
     );
   }
 

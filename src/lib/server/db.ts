@@ -233,9 +233,16 @@ export async function insertSignal(signal: {
   const confidence = signal.confidence ?? 0;
   const reasoning = signal.reasoning ?? "Risposta AI incompleta: campo mancante.";
   const res = await client.query(
+    // attivato_il valorizzato QUI, nello stesso INSERT (03/09).
+    //
+    // Il segnale nasce gia' ATTIVO: non esiste piu' nessuna attesa. Scriverlo
+    // dentro l'INSERT invece che con una UPDATE separata toglie la finestra
+    // in cui un segnale esisterebbe senza attivazione -- finestra che, se una
+    // scrittura fallisse, lo farebbe trattare come "in attesa" al ciclo dopo,
+    // resuscitando il blocco della generazione.
     `INSERT INTO signals
-      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
+      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo, attivato_il)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false, now())
      RETURNING id, created_at`,
     [
       signal.direction,

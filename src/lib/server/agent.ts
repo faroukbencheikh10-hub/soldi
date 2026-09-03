@@ -1,5 +1,16 @@
 const SYSTEM_PROMPT = `Sei un analista esperto di trading su XAUUSD (oro/USD) che applica la strategia ICT (Inner Circle Trader, Michael J. Huddleston): struttura + liquidita' + zone istituzionali + timing. Il tuo compito e' decidere se generare un segnale BUY, SELL o NO_TRADE seguendo il percorso qui sotto. Non entrare solo perche' il prezzo tocca una zona interessante -- serve una sequenza tecnica riconoscibile -- ma non e' richiesto che ogni singolo elemento sia perfetto: vedi la REGOLA DI CONTEGGIO piu' sotto.
 
+IL GRAFICO. Il campo "candele_chiuse_recenti" contiene le candele OHLC chiuse di
+cinque timeframe: d1 (20 candele, circa un mese), h4 (20, tre giorni), h1 (30,
+trenta ore), m15 (100, venticinque ore), m5 (100, otto ore e venti). Sono ordinate
+dalla piu' recente alla piu' vecchia. Usale per VERIFICARE con i tuoi occhi cio'
+che gli altri campi ti riassumono: se "ict_struttura_m15" dice che c'e' stato un
+BOS, controlla sulle candele m15 che il massimo o minimo rilevante sia stato
+davvero superato in chiusura. Se un campo riassuntivo e le candele si
+contraddicono, fidati delle candele e dillo nella spiegazione. Servono anche per
+individuare da te massimi e minimi uguali, gli estremi di seduta e il contesto che
+i campi riassuntivi non coprono.
+
 STRUTTURA A TRE LIVELLI (top-down, come nell'impianto ICT originale):
 
 1) NARRATIVA — H4 e H1. Non sono una conferma: dicono DOVE il prezzo vuole andare.
@@ -172,6 +183,10 @@ interface MarketSnapshot {
   us10y: number | null;
   us10yChangePct: number | null;
   candles: Record<string, unknown[]>;
+  // Finestre estese (100 candele): usate solo qui, per dare all'AI il
+  // grafico. La logica continua a lavorare sulle 40 candele di candles[].
+  candles5mEstese?: unknown[];
+  candles15mEstese?: unknown[];
   atr15m?: number | null;
   atr1h?: number | null;
   atr5m?: number | null;
@@ -430,9 +445,27 @@ export function buildAiPayload({
     memoria_mercato: memoria,
     eventi_attivi: eventiInChiaro,
     scenario,
+    // MEMORIA DEL GRAFICO (03/09): da 10 candele a 270.
+    //
+    // Prima l'AI riceveva 5 candele M15 e 5 M5 -- un'ora e un quarto sul
+    // timeframe del setup -- e NESSUNA candela D1, H4 o H1. Dei timeframe
+    // alti vedeva solo i campi gia' digeriti dal codice, pur essendo proprio
+    // quelli su cui la strategia le chiede di costruire narrativa e draw on
+    // liquidity. Doveva descrivere un grafico che non aveva mai visto, e
+    // infatti scriveva cose come "CHoCH/BOS M15 non stampato nel campo
+    // struttura": non poteva controllare.
+    //
+    // Ora vede: D1 20 (un mese), H4 20 (tre giorni), H1 30 (trenta ore),
+    // M15 100 (venticinque ore), M5 100 (otto ore e venti).
+    //
+    // Nessuna chiamata di rete in piu' per D1/H4/H1: erano gia' scaricate e
+    // buttate via. Su M5 e M15 il download passa da 40 a 100 candele.
     candele_chiuse_recenti: {
-      m15: candeleChiuse(marketSnapshot.candles?.["15m"]),
-      m5: candeleChiuse(marketSnapshot.candles?.["5m"]),
+      d1: candeleChiuse(marketSnapshot.candles?.["1d"], 20),
+      h4: candeleChiuse(marketSnapshot.candles?.["4h"], 20),
+      h1: candeleChiuse(marketSnapshot.candles?.["1h"], 30),
+      m15: candeleChiuse(marketSnapshot.candles15mEstese ?? marketSnapshot.candles?.["15m"], 100),
+      m5: candeleChiuse(marketSnapshot.candles5mEstese ?? marketSnapshot.candles?.["5m"], 100),
     },
     news_rilevanti: news,
     calendario_economico: calendar,
