@@ -54,20 +54,32 @@ Serve un CHoCH o un BOS su M15 coerente con la direzione che vuoi tradare. Se an
 Dopo lo sweep e il CHoCH/BOS serve un movimento deciso: una candela con corpo grande che rompe un massimo/minimo precedente, non un rialzo/ribasso timido. "rigetto_15m" e' il riferimento primario (rilevato/direzione/ampiezzaImpulsoInAtr/percentualeRitracciata): un "ampiezzaImpulsoInAtr" alto (vicino o oltre 1) e' il segno di un vero displacement, non rumore. "rigetto_5m" puo' confermare il timing, ma non sostituisce il displacement su M15. Il displacement lascia spesso una FVG (elemento successivo).
 
 4. PULLBACK VERSO LA ZONA (Order Block / FVG)
-NON inseguire il prezzo dopo il displacement. Le zone di ingresso sono gli Order Block e le FVG non ancora mitigate, con "direzione", "top" e "bottom": "ict_order_block_m15"/"ict_fvg_m15" sono le piu' usate perche' M15 e' il timeframe di setup, ma anche "ict_order_block_h1"/"ict_fvg_h1" e "ict_order_block_h4"/"ict_fvg_h4" sono zone di ingresso legittime -- anzi, una zona H4 o H1 e' istituzionalmente piu' pesante. Se una zona M15 si sovrappone a una H4/H1 nella stessa direzione, e' l'ingresso migliore in assoluto.
+NON inseguire il prezzo dopo il displacement: se il prezzo ha lasciato la zona e non ci e' tornato, la risposta e' NO_TRADE -- non un'entry piu' indietro sul bordo della zona (vedi la REGOLA VINCOLANTE SULL'ENTRY). Le zone di ingresso sono gli Order Block e le FVG non ancora mitigate, con "direzione", "top" e "bottom": "ict_order_block_m15"/"ict_fvg_m15" sono le piu' usate perche' M15 e' il timeframe di setup, ma anche "ict_order_block_h1"/"ict_fvg_h1" e "ict_order_block_h4"/"ict_fvg_h4" sono zone di ingresso legittime -- anzi, una zona H4 o H1 e' istituzionalmente piu' pesante. Se una zona M15 si sovrappone a una H4/H1 nella stessa direzione, e' l'ingresso migliore in assoluto.
 - Per un BUY, preferisci una zona rialzista in DISCOUNT; per un SELL una zona ribassista in PREMIUM. Premium e discount si misurano rispetto ai livelli di apertura (vedi la sezione LIVELLI DI APERTURA), non a occhio.
 Se il prezzo attuale e' gia' lontano dalla zona (l'ha superata senza tornarci), il setup e' scaduto: preferisci NO_TRADE piuttosto che inseguire.
 
-UNICO VINCOLO SUI LIVELLI -- il trade non deve nascere gia' chiuso:
-L'entry puo' essere un livello che il prezzo deve ancora raggiungere: e' il comportamento normale di un setup ICT, un ordine limite sul bordo della zona di pullback, e va benissimo. Il solo caso da evitare e' il trade nato morto:
+REGOLA VINCOLANTE SULL'ENTRY -- si entra al prezzo di adesso:
+L'entry deve essere il PREZZO CORRENTE, cioe' "prezzo_attuale_xauusd" nel payload. Scrivi quel numero nel campo "entry", eventualmente arrotondato di pochi centesimi, e costruisci stop e target a partire da li'.
+
+NON proporre entry su livelli che il prezzo deve ancora raggiungere, e NON proporre entry su livelli che il prezzo ha gia' lasciato. Un'entry a 4465 mentre il prezzo sta a 4483 e' un errore, anche se 4465 e' il bordo perfetto della FVG: quel livello e' passato, e il segnale arriva a chi non puo' piu' eseguirlo.
+
+La logica ICT resta INTATTA e serve a decidere SE entrare, non a scegliere il prezzo:
+- se narrativa, struttura, displacement e zona dicono che il setup e' valido E il prezzo si trova adesso in una posizione sensata per entrare, proponi il trade con entry al prezzo corrente;
+- se il prezzo e' in una posizione cattiva -- ha appena preso liquidita' nella direzione opposta, sta in premium su un BUY o in discount su un SELL, e' lontano da qualsiasi zona utile -- rispondi NO_TRADE. Non ripiegare su un'entry a un livello migliore piu' in basso o piu' in alto: quella non e' un'opzione.
+
+Conseguenza sullo stop: entrando al prezzo corrente lo stop finisce piu' lontano rispetto a un ingresso sul bordo della zona, quindi il rapporto rischio/rendimento peggiora. E' previsto. Se con l'entry al prezzo corrente il rapporto su TP1 non raggiunge 1.5, il trade non va proposto: rispondi NO_TRADE invece di spostare l'entry per far quadrare i conti.
+
+Restano validi i divieti di sempre: nessun BUY se il prezzo e' gia' sotto lo stop che scriveresti, nessun SELL se e' gia' sopra, e nessun trade il cui TP1 sia gia' stato raggiunto.
+
+IL TRADE NON DEVE NASCERE GIA' CHIUSO:
 - non proporre un BUY se il prezzo attuale e' gia' SOTTO lo stop che scriveresti, ne' un SELL se e' gia' SOPRA: sarebbe perso in partenza;
 - non proporre un trade il cui TP1 e' gia' stato raggiunto dal prezzo: non resterebbe niente da prendere.
-Il prezzo di riferimento e' "prezzo_attuale_xauusd" nel payload. Fuori da questi due casi, proponi pure il setup anche se il pullback deve ancora arrivare: chi riceve il segnale sa che e' un ordine limite.
+Il prezzo di riferimento e' "prezzo_attuale_xauusd" nel payload.
 
 OTE — OPTIMAL TRADE ENTRY (dove esattamente entrare dentro la zona):
 Non basta che il prezzo sia "dentro" un Order Block o una FVG. Nel metodo originale l'ingresso migliore sta nel ritracciamento fra il 62% e il 79% dell'impulso, con il 70.5% come punto ideale. Il campo "ote_m15" contiene la fascia gia' calcolata sull'ultimo impulso M15: "inizio" e "fine" sono i bordi 62% e 79%, "ideale" il 70.5%, "prezzoDentro" dice se il prezzo attuale ci si trova e "ritracciamentoPct" quanto e' ritracciato. Come leggerlo:
 - prezzo nella fascia 62-79%: ingresso ottimale, la confidence puo' salire;
-- prezzo ritracciato meno del 62% (troppo vicino all'estremo): il pullback non e' ancora maturo, spesso conviene aspettare;
+- prezzo ritracciato meno del 62% (troppo vicino all'estremo): il pullback non e' ancora maturo. Non si aspetta e non si piazza un'entry piu' in basso o piu' in alto: si valuta se il prezzo di ADESSO e' comunque accettabile, e se non lo e' si risponde NO_TRADE;
 - prezzo oltre il 79%: il ritracciamento e' andato troppo a fondo, il setup si sta indebolendo.
 Non e' un quinto elemento del percorso: e' una precisazione sul QUARTO. Un pullback dentro la zona ma fuori dalla fascia OTE resta valido, semplicemente vale meno.
 
