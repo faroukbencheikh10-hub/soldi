@@ -249,22 +249,7 @@ export interface MarketSnapshot {
   dxyChangePct: number | null;
   us10y: number | null;
   us10yChangePct: number | null;
-  // "1d" aggiunto il 03/09: le candele giornaliere erano gia' scaricate (30,
-  // un mese di storia) per calcolare biasD1 e i livelli di apertura, e poi
-  // buttate via. All'AI arrivava solo la parola "rialzista" o "ribassista":
-  // il timeframe che stabilisce la direzione di fondo era l'unico che non
-  // poteva verificare.
-  candles: { "5m": Candle[]; "15m": Candle[]; "30m": Candle[]; "1h": Candle[]; "4h": Candle[]; "1d": Candle[] };
-  // FINESTRE ESTESE, lette SOLO dal payload dell'AI (03/09).
-  //
-  // Stanno in campi separati di proposito. Le candele in candles["5m"] e
-  // candles["15m"] restano 40 perche' non alimentano solo l'AI: ci lavorano
-  // il rilevamento degli eventi, l'invalidazione e il filtro accumulo.
-  // Allargando quelle finestre comparirebbero eventi di ore prima che non
-  // esistevano, cambiando decisioni che non c'entrano nulla con quanto
-  // grafico vede l'AI.
-  candles5mEstese: Candle[];
-  candles15mEstese: Candle[];
+  candles: { "5m": Candle[]; "15m": Candle[]; "30m": Candle[]; "1h": Candle[]; "4h": Candle[] };
   source: "metaapi" | "twelvedata";
   atr15m: number | null;
   atr1h: number | null;
@@ -364,8 +349,8 @@ async function tryTwelveData(): Promise<MarketSnapshot | null> {
   const calendarioMercati = getMarketCalendarContext(adesso);
 
   const [c5, c15, c30, c1h, c4h, c1d, macro] = await Promise.all([
-    tdFetchTimeSeries("XAU/USD", "5min", 100),
-    tdFetchTimeSeries("XAU/USD", "15min", 100),
+    tdFetchTimeSeries("XAU/USD", "5min", 40),
+    tdFetchTimeSeries("XAU/USD", "15min", 40),
     tdFetchTimeSeries("XAU/USD", "30min", 40),
     tdFetchTimeSeries("XAU/USD", "1h", 40),
     tdFetchTimeSeries("XAU/USD", "4h", 40),
@@ -395,9 +380,7 @@ async function tryTwelveData(): Promise<MarketSnapshot | null> {
     dxyChangePct: macro.dxy.changePct,
     us10y: macro.us10y.value,
     us10yChangePct: macro.us10y.changePct,
-    candles: { "5m": c5.slice(0, 40), "15m": c15.slice(0, 40), "30m": c30 ?? [], "1h": c1h, "4h": c4h ?? [], "1d": c1d ?? [] },
-    candles5mEstese: c5,
-    candles15mEstese: c15,
+    candles: { "5m": c5, "15m": c15, "30m": c30 ?? [], "1h": c1h, "4h": c4h ?? [] },
     source: "twelvedata",
     atr15m: atr15,
     atr1h,
@@ -459,8 +442,8 @@ async function tryMetaApi(): Promise<MarketSnapshot | null> {
   const calendarioMercati = getMarketCalendarContext(adesso);
 
   const [c5Raw, c15Raw, c30Raw, c1hRaw, c4hRaw, c1dRaw, macro] = await Promise.all([
-    metaApiFetchTimeSeries("5min", 100),
-    metaApiFetchTimeSeries("15min", 100),
+    metaApiFetchTimeSeries("5min", 40),
+    metaApiFetchTimeSeries("15min", 40),
     metaApiFetchTimeSeries("30min", 40),
     metaApiFetchTimeSeries("1h", 40),
     metaApiFetchTimeSeries("4h", 40),
@@ -507,9 +490,7 @@ async function tryMetaApi(): Promise<MarketSnapshot | null> {
     dxyChangePct: macro.dxy.changePct,
     us10y: macro.us10y.value,
     us10yChangePct: macro.us10y.changePct,
-    candles: { "5m": c5.slice(0, 40), "15m": c15.slice(0, 40), "30m": c30 ?? [], "1h": c1h, "4h": c4h ?? [], "1d": c1d ?? [] },
-    candles5mEstese: c5,
-    candles15mEstese: c15,
+    candles: { "5m": c5, "15m": c15, "30m": c30 ?? [], "1h": c1h, "4h": c4h ?? [] },
     source: "metaapi",
     atr15m: atr15,
     atr1h,

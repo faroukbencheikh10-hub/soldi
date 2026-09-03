@@ -122,29 +122,8 @@ export async function ensureSchema() {
     -- Le righe gia' esistenti vengono considerate attivate alla creazione,
     -- cosi' lo storico resta coerente e le statistiche non cambiano.
     ALTER TABLE signals ADD COLUMN IF NOT EXISTS attivato_il TIMESTAMPTZ;
-    -- ATTENZIONE alla clausola sulla data: senza, questa UPDATE distrugge il
-    -- meccanismo che dovrebbe abilitare.
-    --
-    -- ensureSchema() gira a OGNI ciclo, non una volta sola. Una UPDATE che
-    -- filtra solo su "attivato_il IS NULL" colpisce esattamente i segnali IN
-    -- ATTESA -- che hanno attivato_il nullo proprio perche' il prezzo non ha
-    -- ancora toccato l'entry -- e li marca come attivati d'ufficio al primo
-    -- ciclo dopo la nascita.
-    --
-    -- E' quello che e' successo dal 02/09 al 03/09: ogni segnale risultava
-    -- attivato nello stesso istante in cui nasceva (zero minuti di attesa in
-    -- tutte le righe), e la notifica partiva subito con un'entry che il
-    -- prezzo doveva ancora raggiungere -- per esempio un SELL con entry
-    -- 4432.36 notificato mentre il prezzo era 4429.99, cioe' 2,37 dollari
-    -- sotto il livello da cui si sarebbe dovuto vendere.
-    --
-    -- Il limite temporale confina la migrazione al suo scopo vero: le righe
-    -- gia' esistenti quando la colonna e' stata introdotta. I segnali nati
-    -- dopo restano in attesa finche' e' il monitor ad attivarli davvero,
-    -- guardando il prezzo.
     UPDATE signals SET attivato_il = created_at
-      WHERE attivato_il IS NULL AND direction IN ('BUY','SELL')
-        AND created_at < TIMESTAMPTZ '2026-09-02 18:00:00+00';
+      WHERE attivato_il IS NULL AND direction IN ('BUY','SELL');
 
     ALTER TABLE setup_events DROP CONSTRAINT IF EXISTS setup_events_timeframe_check;
     ALTER TABLE setup_events ADD CONSTRAINT setup_events_timeframe_check
@@ -233,16 +212,9 @@ export async function insertSignal(signal: {
   const confidence = signal.confidence ?? 0;
   const reasoning = signal.reasoning ?? "Risposta AI incompleta: campo mancante.";
   const res = await client.query(
-    // attivato_il valorizzato QUI, nello stesso INSERT (03/09).
-    //
-    // Il segnale nasce gia' ATTIVO: non esiste piu' nessuna attesa. Scriverlo
-    // dentro l'INSERT invece che con una UPDATE separata toglie la finestra
-    // in cui un segnale esisterebbe senza attivazione -- finestra che, se una
-    // scrittura fallisse, lo farebbe trattare come "in attesa" al ciclo dopo,
-    // resuscitando il blocco della generazione.
     `INSERT INTO signals
-      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo, attivato_il)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false, now())
+      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
      RETURNING id, created_at`,
     [
       signal.direction,
@@ -416,6 +388,27 @@ export async function closeSignal(
       [id, outcome, resultR]
     );
   }
+
+  // Pulizia delle chiavi "una volta sola per segnale" usate per non ripetere
+  // le notifiche (gestione_avvisata_, tp1_avvisato_).
+  //
+  // Sta QUI dentro e non nei punti chiamanti di proposito: closeSignal e'
+  // l'unica strada per chiudere un trade, quindi la pulizia non puo' essere
+  // dimenticata aggiungendo un nuovo punto di chiusura in futuro. Senza,
+  // ogni trade lascerebbe tre righe morte in app_settings per sempre --
+  // migliaia in qualche mese. A trade chiuso quelle chiavi non possono piu'
+  // impedire nessuna notifica: non servono a niente.
+  //
+  // Isolata: se la pulizia fallisce, il trade resta comunque chiuso. E'
+  // manutenzione, non deve poter far fallire la registrazione dell'esito.
+  try {
+    await client.query(`DELETE FROM app_settings WHERE key IN ($1, $2)`, [
+      `gestione_avvisata_${id}`,
+      `tp1_avvisato_${id}`,
+    ]);
+  } catch (err) {
+    console.error(`[db] pulizia chiavi notifiche fallita per il segnale ${id}:`, err);
+  }
 }
 
 // Le statistiche contano solo dallo SPARTIACQUE (impostazione
@@ -445,6 +438,95 @@ export async function getStats() {
      FROM signals`,
     [spartiacque]
   );
+  return res.rows[0];
+}
+
+export async function insertSignal5m(signal: {
+  direction: string;
+  entry: number | null;
+  stopLoss: number | null;
+  tp1: number | null;
+  tp2: number | null;
+  riskReward: number | null;
+  confidence: number;
+  reasoning: string;
+  marketSnapshot?: unknown;
+}) {
+  const client = getPool();
+  const entry = signal.entry ?? 0;
+  const stopLoss = signal.stopLoss ?? 0;
+  const tp1 = signal.tp1 ?? 0;
+  const tp2 = signal.tp2 ?? 0;
+  const riskReward = signal.riskReward ?? 0;
+  const confidence = signal.confidence ?? 0;
+  const reasoning = signal.reasoning ?? "Risposta AI incompleta: campo mancante.";
+  const res = await client.query(
+    `INSERT INTO signals_5m
+      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
+     RETURNING id, created_at`,
+    [
+      signal.direction,
+      entry,
+      stopLoss,
+      tp1,
+      tp2,
+      riskReward,
+      confidence,
+      reasoning,
+      JSON.stringify(signal.marketSnapshot ?? {}),
+    ]
+  );
+  return res.rows[0];
+}
+
+export async function getSignalHistory5m(limit = 50) {
+  const client = getPool();
+  const res = await client.query(
+    `SELECT * FROM signals_5m WHERE is_demo = false AND direction != 'NO_TRADE' ORDER BY created_at DESC LIMIT $1`,
+    [limit]
+  );
+  return res.rows;
+}
+
+export async function getLatestSignal5m() {
+  const client = getPool();
+  const res = await client.query(
+    `SELECT * FROM signals_5m WHERE is_demo = false ORDER BY created_at DESC LIMIT 1`
+  );
+  return res.rows[0] ?? null;
+}
+
+export async function closeSignal5m(
+  id: string,
+  outcome: "WIN" | "LOSS" | "BREAKEVEN",
+  resultR: number,
+  note?: string
+) {
+  const client = getPool();
+  if (note) {
+    await client.query(
+      `UPDATE signals_5m SET outcome = $2, result_r = $3, closed_at = now(), reasoning = reasoning || $4 WHERE id = $1`,
+      [id, outcome, resultR, note]
+    );
+  } else {
+    await client.query(
+      `UPDATE signals_5m SET outcome = $2, result_r = $3, closed_at = now() WHERE id = $1`,
+      [id, outcome, resultR]
+    );
+  }
+}
+
+export async function getStats5m() {
+  const client = getPool();
+  const res = await client.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE is_demo = false AND direction != 'NO_TRADE') AS total,
+      COUNT(*) FILTER (WHERE is_demo = false AND outcome = 'WIN') AS wins,
+      COUNT(*) FILTER (WHERE is_demo = false AND outcome IN ('WIN','LOSS')) AS decided,
+      AVG(risk_reward) FILTER (WHERE is_demo = false AND direction <> 'NO_TRADE' AND risk_reward > 0) AS avg_rr
+    FROM signals_5m
+  `);
   return res.rows[0];
 }
 
@@ -484,11 +566,24 @@ export async function setAiPaused(paused: boolean) {
   }
 }
 
+// CHIAMATE VOCALI
+// Interruttore delle chiamate vocali Twilio, spento di default (assenza di
+// chiave = false, come ai_paused). Distinto da twilioConfigurato() in
+// twilioCall.ts: questo dice se l'utente le VUOLE, quello se sono
+// TECNICAMENTE possibili. Servono entrambi per chiamare davvero.
+export async function chiamateAttive(): Promise<boolean> {
+  return (await getSetting("chiamate_attive")) === "true";
+}
+
+export async function setChiamateAttive(attive: boolean) {
+  await setSetting("chiamate_attive", attive ? "true" : "false");
+}
+
 // Stato minimo per /api/ticker: prezzo, variazione, orario e l'ultimo segnale
 // di ogni canale. Poche decine di byte invece di centinaia di KB.
 export async function getTickerState() {
   const client = getPool();
-  const [snap, ultimo] = await Promise.all([
+  const [snap, ultimo, ultimo5m] = await Promise.all([
     client.query(
       `SELECT xauusd, xauusd_change_pct, created_at, raw->>'xauusdQuotedAt' AS xauusd_quoted_at
        FROM market_snapshots ORDER BY created_at DESC LIMIT 1`
@@ -505,6 +600,10 @@ export async function getTickerState() {
          AND (direction = 'NO_TRADE' OR attivato_il IS NOT NULL)
        ORDER BY created_at DESC LIMIT 1`
     ),
+    client.query(
+      `SELECT id, direction, entry, confidence FROM signals_5m
+       WHERE is_demo = false ORDER BY created_at DESC LIMIT 1`
+    ),
   ]);
   const s = snap.rows[0] ?? null;
   return {
@@ -516,6 +615,7 @@ export async function getTickerState() {
     snapshotCreatoIl: s?.created_at ?? null,
     quotatoIl: s?.xauusd_quoted_at ? Number(s.xauusd_quoted_at) : null,
     ultimoSegnale: ultimo.rows[0] ?? null,
+    ultimoSegnale5m: ultimo5m.rows[0] ?? null,
   };
 }
 

@@ -25,6 +25,11 @@ export interface TradeSignal {
   reasoning: string;
   outcome?: SignalOutcome;
   resultR?: number;
+  /** Istante in cui il prezzo ha toccato l'entry e il trade e' diventato
+   * vivo. Nullo finche' il segnale e' solo un ordine limite in attesa.
+   * Serve alla dashboard per distinguere i due stati: senza, un setup
+   * appena generato sembra identico a un trade gia' in corso. */
+  attivatoIl?: string | null;
   isDemo: boolean;
 }
 

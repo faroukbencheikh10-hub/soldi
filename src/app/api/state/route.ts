@@ -4,17 +4,21 @@ import {
   getLatestContextSnapshot,
   getSignalHistory,
   getStats,
+  getSignalHistory5m,
+  getStats5m,
 } from "@/lib/server/db";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const [marketSnapshot, contextSnapshot, history, stats] = await Promise.all([
+    const [marketSnapshot, contextSnapshot, history, stats, history5m, stats5m] = await Promise.all([
       getLatestMarketSnapshot(),
       getLatestContextSnapshot(),
       getSignalHistory(50),
       getStats(),
+      getSignalHistory5m(50),
+      getStats5m(),
     ]);
 
     return NextResponse.json({
@@ -23,6 +27,8 @@ export async function GET() {
       contextSnapshot,
       history,
       stats,
+      history5m,
+      stats5m,
     });
   } catch (err) {
     return NextResponse.json(

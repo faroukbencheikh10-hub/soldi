@@ -9,6 +9,9 @@ import {
   attivaSegnale,
   scadeSegnaleInAttesa,
   closeSignal,
+  insertSignal5m,
+  getLatestSignal5m,
+  closeSignal5m,
   isAiPaused,
   getSetting,
   setSetting,
@@ -20,13 +23,14 @@ import {
   salvaCandeleMemoria,
   pulisciCandeleMemoria,
 } from "@/lib/server/db";
-import { generateSignal, generaScenarioNotizia } from "@/lib/server/agent";
 import { getMarketSnapshot, getCurrentPrice, isMarketOpen, type MarketSnapshot } from "@/lib/server/marketData";
 import { metaApiFetchTimeSeries } from "@/lib/server/metaApiData";
 import { getRelevantNews } from "@/lib/server/news";
 import { getEconomicCalendar } from "@/lib/server/calendar";
+import { generateSignal, generateSignal5m, generaScenarioNotizia } from "@/lib/server/agent";
 import { validateSignal } from "@/lib/server/validateSignal";
 import { sendPushToAll } from "@/lib/server/pushSend";
+import { chiamaSeAttivo } from "@/lib/server/twilioCall";
 import { shouldCallAI, hasTechnicalSetup } from "@/lib/server/aiGate";
 import {
   rilevaEventi,
@@ -72,7 +76,13 @@ const ATTESA_MASSIMA_MS = 90 * 60 * 1000;
 //
 // Qui non si cambia nessuna decisione: si misura soltanto quanto dista
 // l'entry dal prezzo e se l'ordine e' ancora da raggiungere, gia' valido, o
-// ormai superato. Serve a scriverlo nella notifica e in dashboard.
+// ormai superato.
+//
+// DOVE E' USATA OGGI: solo dal canale 5m, che e' disattivato (la sua rotta
+// cron risponde "auto_disabled"). Il canale principale non la usa piu': il
+// suo testo di notifica e il pannello mostrano entry e prezzo separatamente,
+// e lo stato "in attesa" viene ora dal campo attivato_il del segnale, che e'
+// un fatto registrato invece di una stima ricalcolata a ogni lettura.
 // ---------------------------------------------------------------------------
 
 export type StatoIngresso = "eseguibile" | "in_attesa" | "superato";
@@ -150,45 +160,164 @@ interface CandelaGrezza {
 // - lo snapshot di mercato si persiste al massimo ogni 5 minuti
 const INTERVALLO_MINIMO_AI_MS = 60 * 1000;
 const INTERVALLO_SNAPSHOT_MS = 5 * 60 * 1000;
+const SIGNAL_TIMEOUT_MS_5M = 60 * 60 * 1000;
 // Filtro tecnico locale: quanti segnali tecnici servono per giustificare una
 // chiamata a OpenAI sul canale oro.
 const SOGLIA_SETUP_ORO = 1;
+
+// Il nuovo stop, dopo il tocco di TP1, non e' una percentuale a caso: deve
+// garantire che il risultato minimo in caso di ritracciamento resti almeno
+// MIN_RR_STOP_DOPO_TP1 -- la stessa soglia di 1.5R che governa gia' tutta la
+// strategia (vedi MIN_RISK_REWARD in validateSignal.ts, la regola per cui
+// un TP1 sotto 1.5 volte lo stop viene scartato). Non ha senso proteggere il
+// trade con un margine piu' permissivo di quello richiesto per farlo nascere.
+//
+// Sui dati reali TP2 vale in media 3.12R (min 1.73R), quindi c'e' sempre
+// spazio per uno stop intermedio fra 1.5R e il TP1 (che tipicamente vale
+// gia' >=1.5R per costruzione): il margine concesso e' quanto resta fra i
+// due, non una percentuale fissa della distanza.
+const MIN_RR_STOP_DOPO_TP1 = 1.5;
+
+interface EsitoMonitoraggio {
+  outcome: "WIN" | "LOSS" | null;
+  /** Due significati secondo il valore di outcome:
+   * - outcome="WIN": l'uscita e' avvenuta DOPO aver toccato TP1 (sullo stop
+   *   mobile o su TP2), non sul TP1 originale -- serve per calcolare il
+   *   risultato in R corretto, che puo' essere piu' alto (TP2 pieno) o piu'
+   *   basso (stop mobile colpito) del semplice R di TP1.
+   * - outcome=null: il trade ha gia' toccato TP1 e sta ancora inseguendo
+   *   TP2 (non ha ancora toccato ne' lo stop mobile ne' TP2) -- dice al
+   *   chiamante di non richiudere il trade per un semplice sorpasso di
+   *   prezzo su TP1 nel ramo di ripiego (vedi il controllo piu' sotto). */
+  uscitaDopoTp1: boolean;
+  /** Il livello di prezzo a cui il trade e' USCITO, da cui si calcola il
+   * risultato in R. Non e' sempre uno stop: puo' essere lo stop originale
+   * (LOSS), lo stop mobile dopo TP1, oppure TP2 stesso se raggiunto.
+   * Chiamarlo "stopEffettivo" aveva portato a registrare i TP2 pieni al
+   * valore dello stop mobile -- 1.5R invece dei 3.5R realmente presi. */
+  livelloUscita: number;
+}
 
 // Esito di un trade ricostruito dalle candele, non dal prezzo dell'istante.
 // Prima si confrontava solo il prezzo corrente con stop e target: se il prezzo
 // toccava il target e tornava indietro fra un controllo e l'altro, quel target
 // non veniva mai visto e il trade finiva per scadere a "pareggio".
+//
+// Rilegge SEMPRE l'intera storia dall'attivazione, invece di ricordare uno
+// stato "gia' in inseguimento" da un ciclo all'altro. E' deterministico: le
+// stesse candele producono sempre la stessa sequenza di eventi, quindi non
+// serve persistere nulla in piu' -- niente colonna nuova, niente rischio di
+// disallineamento se un ciclo salta o il DB fallisce a meta'.
 async function esitoDalleCandele(
   direzione: string,
   apertoIl: string | Date,
+  entryPrezzo: number,
   stopLoss: number,
-  tp1: number
-): Promise<"WIN" | "LOSS" | null> {
+  tp1: number,
+  tp2: number | null
+): Promise<EsitoMonitoraggio> {
+  const nessunEsito: EsitoMonitoraggio = {
+    outcome: null,
+    uscitaDopoTp1: false,
+    livelloUscita: stopLoss,
+  };
+
   const candele = await metaApiFetchTimeSeries("5min", 60);
-  if (!candele || candele.length === 0) return null;
+  if (!candele || candele.length === 0) return nessunEsito;
 
   const apertura = new Date(apertoIl).getTime();
-  if (!Number.isFinite(apertura)) return null;
+  if (!Number.isFinite(apertura)) return nessunEsito;
 
   const rilevanti = candele
     .filter((c) => new Date(c.datetime).getTime() >= apertura)
     .sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
+
+  // TP2 valido solo se e' un target VERO, cioe' oltre TP1 nella direzione
+  // del trade. Non basta "finito e diverso da null":
+  //  - se l'AI omette tp2, validateSignal lo porta a 0. Con un controllo
+  //    ingenuo un BUY lo considererebbe raggiunto subito (massimo >= 0 e'
+  //    sempre vero) chiudendo il trade all'istante, mentre un SELL non lo
+  //    raggiungerebbe mai (minimo <= 0 e' sempre falso) inseguendo fino
+  //    alla scadenza. Due errori opposti, entrambi silenziosi.
+  //  - se tp2 fosse per errore piu' vicino di tp1, inseguirlo non avrebbe
+  //    comunque senso: si starebbe puntando a un bersaglio gia' superato.
+  const haTp2 =
+    tp2 !== null &&
+    Number.isFinite(tp2) &&
+    tp2 > 0 &&
+    (direzione === "BUY" ? tp2 > tp1 : tp2 < tp1);
+
+  // Lo stop dopo TP1 garantisce ALMENO MIN_RR_STOP_DOPO_TP1 volte il rischio
+  // originale (entry-stop) -- la stessa soglia che governa gia' l'ingresso
+  // del trade. Mai oltre TP1 stesso: proteggere piu' di quanto gia'
+  // guadagnato non avrebbe senso.
+  const rischioOriginale = Math.abs(entryPrezzo - stopLoss);
+  const stopMinimoGarantito =
+    rischioOriginale > 0
+      ? direzione === "BUY"
+        ? entryPrezzo + rischioOriginale * MIN_RR_STOP_DOPO_TP1
+        : entryPrezzo - rischioOriginale * MIN_RR_STOP_DOPO_TP1
+      : entryPrezzo;
+  // Non oltre TP1: se lo stop "minimo garantito" fosse gia' oltre TP1 (caso
+  // limite con TP1 molto vicino alla soglia 1.5R), si usa TP1 come tetto.
+  const stopDopoTp1 =
+    direzione === "BUY" ? Math.min(stopMinimoGarantito, tp1) : Math.max(stopMinimoGarantito, tp1);
+
+  let inseguendo = false;
+  let stopCorrente = stopLoss;
 
   for (const c of rilevanti) {
     const massimo = Number(c.high);
     const minimo = Number(c.low);
     if (!Number.isFinite(massimo) || !Number.isFinite(minimo)) continue;
 
-    const toccatoStop = direzione === "BUY" ? minimo <= stopLoss : massimo >= stopLoss;
-    const toccatoTarget = direzione === "BUY" ? massimo >= tp1 : minimo <= tp1;
+    if (!inseguendo) {
+      // Fase 1, comportamento originale: priorita' allo stop se toccato
+      // nella stessa candela di TP1 (non sappiamo l'ordine interno).
+      const toccatoStop = direzione === "BUY" ? minimo <= stopCorrente : massimo >= stopCorrente;
+      if (toccatoStop) {
+        return { outcome: "LOSS", uscitaDopoTp1: false, livelloUscita: stopCorrente };
+      }
 
-    // Se nella stessa candela risultano toccati entrambi non sappiamo quale sia
-    // arrivato per primo: si assume il caso peggiore, cioe' lo stop.
-    if (toccatoStop) return "LOSS";
-    if (toccatoTarget) return "WIN";
+      const toccatoTp1 = direzione === "BUY" ? massimo >= tp1 : minimo <= tp1;
+      if (!toccatoTp1) continue;
+
+      if (!haTp2) {
+        // Nessun TP2: comportamento di sempre, chiude a TP1.
+        return { outcome: "WIN", uscitaDopoTp1: false, livelloUscita: tp1 };
+      }
+
+      // TP1 toccato con TP2 disponibile: non si chiude, si passa a
+      // inseguire con lo stop spostato appena sopra/sotto TP1. La stessa
+      // candela puo' aver gia' toccato anche il nuovo stop o TP2 (candela
+      // ampia): si continua a valutare QUESTA candela con le nuove regole,
+      // non si passa alla successiva.
+      inseguendo = true;
+      stopCorrente = stopDopoTp1;
+    }
+
+    // Fase 2: inseguimento verso TP2 con lo stop alzato. Priorita' allo
+    // stop anche qui, stesso motivo di prudenza sull'ambiguita'.
+    const toccatoNuovoStop = direzione === "BUY" ? minimo <= stopCorrente : massimo >= stopCorrente;
+    if (toccatoNuovoStop) {
+      // Uscita sullo stop mobile: il risultato e' quel livello.
+      return { outcome: "WIN", uscitaDopoTp1: true, livelloUscita: stopCorrente };
+    }
+
+    const toccatoTp2 = direzione === "BUY" ? massimo >= (tp2 as number) : minimo <= (tp2 as number);
+    if (toccatoTp2) {
+      // Uscita su TP2 PIENO: il risultato e' TP2, non lo stop mobile.
+      // Restituire stopCorrente qui significava registrare 1.5R su un trade
+      // che ne aveva presi 3.5 -- proprio sui trade migliori.
+      return { outcome: "WIN", uscitaDopoTp1: true, livelloUscita: tp2 as number };
+    }
   }
 
-  return null;
+  // Fine delle candele disponibili senza uscita: se si e' passati in
+  // inseguimento, il trade resta aperto mirando a TP2 -- il prossimo ciclo
+  // ripercorrera' la stessa storia e arrivera' deterministicamente allo
+  // stesso punto, senza bisogno di ricordare nulla.
+  return { outcome: null, uscitaDopoTp1: inseguendo, livelloUscita: stopCorrente };
 }
 
 // AVVISO NOTIZIA CON LIVELLI PRONTI
@@ -351,14 +480,36 @@ async function avvisaNotizia(
 // Portare lo stop a pareggio dopo un parziale rende l'attesa gratuita: da li'
 // in poi il trade non puo' piu' perdere, e le ore successive non costano
 // niente. L'esecuzione e' manuale (l'app non manda ordini al broker): questo
-// e' solo l'avviso che il livello e' stato raggiunto.
-//
-// Parte una volta sola per segnale. Non serve nessuna guardia sull'ingresso:
-// arrivare a +1R implica che il prezzo ha gia' superato l'entry.
-const SOGLIA_PARZIALE_R = 1;
+// e' solo l'avviso che il momento e' arrivato.
 
-async function avvisaParziale(
-  segnale: { id: string | number; direction: string; entry: unknown; stop_loss: unknown; tp1: unknown },
+// AVVISO UNICO DI GESTIONE, prima che il prezzo tocchi TP1
+//
+// Prima erano DUE notifiche: una a +1R ("chiudi meta' e stop a pareggio") e
+// una all'80% del percorso verso TP1. Sui dati reali arrivavano quasi
+// insieme: TP1 vale in media 1.72R, quindi l'80% cade a 1.38R, e in 85 casi
+// su 109 sotto 1.4R -- a meno di mezzo R dalla prima, spesso nello stesso
+// ciclo o in quello dopo. Due notifiche ravvicinate che dicono entrambe
+// "agisci ora" sono rumore, non informazione.
+//
+// Ora ce n'e' UNA sola, che parte al piu' tardi fra i due criteri e porta
+// tutte le informazioni: quanto si e' guadagnato, dove sta il prezzo, e la
+// decisione da prendere (chiudere a TP1 o spostare lo stop e puntare a TP2).
+//
+// Perche' PRIMA di TP1 e non quando viene toccato: l'esecuzione e' manuale
+// sul broker, e un avviso che dice "TP1 raggiunto" arriva quando non c'e'
+// piu' niente da decidere -- lo stop andava spostato prima.
+const SOGLIA_PARZIALE_R = 1;
+const SOGLIA_AVVICINAMENTO_TP1 = 0.8;
+
+async function avvisaGestione(
+  segnale: {
+    id: string | number;
+    direction: string;
+    entry: unknown;
+    stop_loss: unknown;
+    tp1: unknown;
+    tp2: unknown;
+  },
   prezzo: number | null
 ): Promise<boolean> {
   if (prezzo === null || !Number.isFinite(prezzo)) return false;
@@ -366,25 +517,58 @@ async function avvisaParziale(
 
   const entry = Number(segnale.entry);
   const stopLoss = Number(segnale.stop_loss);
+  const tp1 = Number(segnale.tp1);
   const rischio = Math.abs(entry - stopLoss);
+  const distanzaTp1 = Math.abs(tp1 - entry);
   if (!Number.isFinite(entry) || !Number.isFinite(stopLoss) || rischio <= 0) return false;
 
-  const guadagnoR =
-    (segnale.direction === "BUY" ? prezzo - entry : entry - prezzo) / rischio;
-  if (guadagnoR < SOGLIA_PARZIALE_R) return false;
+  const guadagnoR = (segnale.direction === "BUY" ? prezzo - entry : entry - prezzo) / rischio;
+  const percorsoTp1 =
+    distanzaTp1 > 0
+      ? (segnale.direction === "BUY" ? prezzo - entry : entry - prezzo) / distanzaTp1
+      : 0;
 
-  const gia = await getSetting("parziale_avvisato_signal_id");
-  if (gia === String(segnale.id)) return false;
-  await setSetting("parziale_avvisato_signal_id", String(segnale.id));
+  // Serve superare ENTRAMBE le soglie: il guadagno minimo che rende sensato
+  // proteggere il trade, e l'avvicinamento che dice che TP1 e' ormai vicino.
+  // Cosi' l'avviso arriva una volta sola, nel momento in cui entrambe le
+  // ragioni per agire sono vere.
+  //
+  // NOTA: oggi la prima condizione non morde mai. validateSignal impone
+  // TP1 >= 1.5 volte lo stop (MIN_RISK_REWARD), quindi l'80% del percorso
+  // cade sempre a 1.2R o piu' -- il guadagno minimo di 1R e' gia' superato
+  // quando scatta l'avvicinamento. Il controllo resta come rete di
+  // sicurezza: se un giorno MIN_RISK_REWARD venisse abbassato, impedirebbe
+  // l'avviso su trade che non hanno ancora guadagnato abbastanza da
+  // giustificare lo spostamento dello stop.
+  if (guadagnoR < SOGLIA_PARZIALE_R) return false;
+  if (percorsoTp1 < SOGLIA_AVVICINAMENTO_TP1) return false;
+
+  // Chiave PER SEGNALE, non una condivisa: con una sola chiave globale due
+  // trade diversi se la sovrascriverebbero a vicenda, e il secondo
+  // riceverebbe l'avviso anche se il primo l'aveva gia' consumata.
+  const chiave = `gestione_avvisata_${segnale.id}`;
+  if ((await getSetting(chiave)) === "true") return false;
+  await setSetting(chiave, "true");
+
+  // Stessa validazione usata in esitoDalleCandele: un TP2 e' un target vero
+  // solo se sta oltre TP1 nella direzione del trade. Con tp2 a 0 (caso in cui
+  // l'AI l'ha omesso) il messaggio proporrebbe di "puntare a TP2 0.00".
+  const tp2 = Number(segnale.tp2);
+  const haTp2 =
+    Number.isFinite(tp2) && tp2 > 0 && (segnale.direction === "BUY" ? tp2 > tp1 : tp2 < tp1);
 
   sendPushToAll({
-    title: `+${guadagnoR.toFixed(1)}R · chiudi meta' e stop a pareggio`,
-    body: `${segnale.direction} da ${entry.toFixed(2)}, prezzo ${prezzo.toFixed(2)}. Sposta lo stop a ${entry.toFixed(
-      2
-    )}: da qui in poi il trade non puo' piu' perdere. TP1 ${Number(segnale.tp1).toFixed(2)}.`,
+    title: `+${guadagnoR.toFixed(1)}R · ${segnale.direction} vicino a TP1 ${tp1.toFixed(2)}`,
+    body: haTp2
+      ? `Prezzo ${prezzo.toFixed(2)}. Decidi ora: chiudere a TP1, o spostare lo stop a ${entry.toFixed(
+          2
+        )} e puntare a TP2 ${tp2.toFixed(2)}.`
+      : `Prezzo ${prezzo.toFixed(2)}. Sposta lo stop a ${entry.toFixed(
+          2
+        )}: da qui in poi il trade non puo' piu' perdere.`,
     url: "/",
-    tag: "parziale-1r",
-  }).catch((err) => console.error("[runAnalysis] avviso parziale fallito:", err));
+    tag: "gestione-trade",
+  }).catch((err) => console.error("[runAnalysis] avviso di gestione fallito:", err));
 
   return true;
 }
@@ -483,6 +667,18 @@ export async function runAnalysis(options?: { force?: boolean }) {
             ).toFixed(2)} · TP2 ${Number(att.tp2).toFixed(2)} · Conf ${Number(att.confidence)}%`,
             url: "/",
           }).catch((err) => console.error("[runAnalysis] invio push attivazione fallito:", err));
+
+          // Chiamata vocale, su un percorso SEPARATO dalla notifica: nessun
+          // await, nessuna query letta qui. L'interruttore lo controlla
+          // chiamaSeAttivo per conto suo, cosi' la notifica push -- che e' il
+          // canale principale e gratuito -- non aspetta niente e non puo'
+          // essere rallentata o interrotta da quello a pagamento.
+          chiamaSeAttivo(
+            `Nuovo segnale ${att.direction === "BUY" ? "acquisto" : "vendita"} su oro. ` +
+              `Entrata a ${eEntry.toFixed(2)}. Stop loss a ${Number(att.stop_loss).toFixed(2)}. ` +
+              `Primo obiettivo a ${Number(att.tp1).toFixed(2)}.`
+          ).catch((err) => console.error("[runAnalysis] chiamata attivazione fallita:", err));
+
           console.log(`[runAnalysis] segnale ${att.id} attivato a ${prezzoTesto}`);
           continue;
         }
@@ -522,12 +718,12 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   let currentPrice: number | null = null;
   let naturalOutcome: "WIN" | "LOSS" | null = null;
-  // Alzato quando c'e' un trade aperto da seguire: l'uscita non avviene
-  // piu' dentro il blocco di monitoraggio, ma dopo che il monitor ha finito.
-  let tradeAttivoDaSeguire = false;
+  let uscitaDopoTp1 = false;
+  let livelloUscita = 0;
   let entry = 0;
   let stopLoss = 0;
   let tp1 = 0;
+  let tp2: number | null = null;
   let risk = 0;
 
   let expired = false;
@@ -537,6 +733,7 @@ export async function runAnalysis(options?: { force?: boolean }) {
     entry = Number(latest.entry);
     stopLoss = Number(latest.stop_loss);
     tp1 = Number(latest.tp1);
+    tp2 = Number.isFinite(Number(latest.tp2)) ? Number(latest.tp2) : null;
     risk = Math.abs(entry - stopLoss);
 
     // Prima fonte: le candele dall'apertura del trade in poi.
@@ -544,34 +741,92 @@ export async function runAnalysis(options?: { force?: boolean }) {
     // esiste da quando il prezzo ha toccato l'entry. Contare da created_at
     // farebbe vedere movimenti avvenuti quando il trade non era ancora vivo,
     // e chiuderebbe come WIN o LOSS cose mai accadute.
-    naturalOutcome = await esitoDalleCandele(
+    //
+    // Se tp2 e' disponibile, il tocco di TP1 non chiude piu' il trade: lo
+    // stop si sposta e si insegue TP2. Vedi esitoDalleCandele.
+    const esito = await esitoDalleCandele(
       latest.direction,
       latest.attivato_il ?? latest.created_at,
+      entry,
       stopLoss,
-      tp1
+      tp1,
+      tp2
     );
+    naturalOutcome = esito.outcome;
+    uscitaDopoTp1 = esito.uscitaDopoTp1;
+    livelloUscita = esito.livelloUscita;
 
-    // Ripiego sul prezzo dell'istante solo se le candele non sono disponibili.
-    if (naturalOutcome === null && currentPrice !== null) {
+    // Ripiego sul prezzo dell'istante solo se le candele non sono disponibili
+    // (fetch MetaApi fallito). Lo stop resta comunque verificato subito: se
+    // il prezzo e' oltre lo stop, chiude LOSS a prescindere da TP2.
+    //
+    // Sul lato WIN invece, quando c'e' un TP2, questo ramo NON chiude piu'
+    // per il semplice sorpasso di TP1: senza lo storico candela per candela
+    // non si puo' sapere se il prezzo l'abbia gia' superato e poi tornato
+    // indietro sotto il nuovo stop -- chiudere qui rischierebbe di registrare
+    // un WIN quando in realta' e' andata storta dopo. Il trade resta aperto:
+    // o tocchera' lo stop (chiude corretto al giro seguente, quando le
+    // candele torneranno disponibili), o scadra' alle 4 ore registrando
+    // comunque il risultato reale al prezzo di allora (vedi piu' sotto).
+    // Senza TP2 invece il comportamento resta quello di sempre: chiude a TP1
+    // anche solo dal prezzo, perche' li' non c'e' nulla da inseguire dopo.
+    if (naturalOutcome === null && currentPrice !== null && !uscitaDopoTp1) {
       if (latest.direction === "BUY") {
         if (currentPrice <= stopLoss) naturalOutcome = "LOSS";
-        else if (currentPrice >= tp1) naturalOutcome = "WIN";
+        else if (tp2 === null && currentPrice >= tp1) naturalOutcome = "WIN";
       } else {
         if (currentPrice >= stopLoss) naturalOutcome = "LOSS";
-        else if (currentPrice <= tp1) naturalOutcome = "WIN";
+        else if (tp2 === null && currentPrice <= tp1) naturalOutcome = "WIN";
       }
     }
 
     if (naturalOutcome) {
-      // Una vincita vale esattamente la distanza fino a TP1, non la posizione
-      // casuale del prezzo nel momento in cui il cron se ne accorge.
-      const resultR = naturalOutcome === "WIN" && risk > 0 ? Math.abs(tp1 - entry) / risk : -1;
-      await closeSignal(latest.id, naturalOutcome, resultR);
+      // Il risultato si calcola sempre dal LIVELLO DI USCITA, qualunque esso
+      // sia: TP1 (chiusura classica), lo stop mobile dopo TP1, o TP2 pieno.
+      // Prima c'erano due rami separati e quello dell'inseguimento usava
+      // sempre il livello dello stop mobile, registrando 1.5R anche sui
+      // trade arrivati a TP2 -- due R persi proprio sui migliori.
+      //
+      // Il ramo di ripiego sul prezzo istantaneo non passa da qui con
+      // uscitaDopoTp1 attivo, quindi livelloUscita e' sempre valorizzato
+      // dalle candele; per sicurezza si tiene comunque il fallback su tp1.
+      const livelloRisultato =
+        naturalOutcome === "WIN" && livelloUscita !== 0 ? livelloUscita : tp1;
+      const resultR =
+        naturalOutcome !== "WIN" ? -1 : risk > 0 ? Math.abs(livelloRisultato - entry) / risk : 0;
+      await closeSignal(
+        latest.id,
+        naturalOutcome,
+        resultR,
+        uscitaDopoTp1 ? "\n\n[TP1 raggiunto, stop spostato: inseguito fino a TP2/nuovo stop.]" : undefined
+      );
     } else {
-      // Il prezzo non ha ancora toccato ne' stop ne' target: e' esattamente
-      // la finestra in cui puo' arrivare sulla zona di ingresso. Il controllo
-      // gira a ogni ciclo, quindi l'avviso parte al primo passaggio utile.
-      await avvisaParziale(latest, currentPrice);
+      // TP1 RAGGIUNTO, ora si insegue TP2: notifica una volta sola.
+      //
+      // uscitaDopoTp1 con outcome null significa esattamente questo: il
+      // prezzo ha toccato TP1, lo stop e' stato alzato, e il trade prosegue.
+      // Ma esitoDalleCandele rilegge tutta la storia a ogni ciclo, quindi
+      // questa condizione resta vera per tutta la durata dell'inseguimento:
+      // senza la chiave per segnale la notifica ripartirebbe ogni minuto.
+      // Stesso meccanismo di avvisaGestione.
+      if (uscitaDopoTp1) {
+        const chiaveTp1 = `tp1_avvisato_${latest.id}`;
+        if ((await getSetting(chiaveTp1)) !== "true") {
+          await setSetting(chiaveTp1, "true");
+          sendPushToAll({
+            title: `TP1 raggiunto · ${latest.direction} in corsa verso TP2`,
+            body: `Stop spostato a ${livelloUscita.toFixed(2)} (profitto gia' garantito). TP2 a ${Number(
+              latest.tp2
+            ).toFixed(2)}.`,
+            url: "/",
+          }).catch((err) => console.error("[runAnalysis] invio push TP1 fallito:", err));
+        }
+      }
+
+      // Il prezzo non ha ancora toccato ne' stop ne' target. L'avviso di
+      // gestione parte quando il trade e' in profitto E vicino a TP1: e'
+      // il momento in cui c'e' ancora tempo per agire a mano sul broker.
+      await avvisaGestione(latest, currentPrice);
 
       // Anche la durata massima parte dall'attivazione: un trade che ha
       // aspettato un'ora prima di partire ha comunque le sue 4 ore di vita.
@@ -582,51 +837,65 @@ export async function runAnalysis(options?: { force?: boolean }) {
         // Prima la scadenza registrava sempre 0, anche su un trade che era a
         // +0,9R: i vincitori venivano tagliati e le statistiche sottostimavano
         // la strategia. Ora si registra il risultato vero al momento della
-        // chiusura. L'esito resta BREAKEVEN perche' ne' stop ne' target sono
-        // stati toccati, ma il risultato in R e' quello reale.
+        // chiusura.
         const resultR =
           currentPrice !== null && risk > 0
             ? Number(
                 ((latest.direction === "BUY" ? currentPrice - entry : entry - currentPrice) / risk).toFixed(2)
               )
             : 0;
-        await closeSignal(
-          latest.id,
-          "BREAKEVEN",
-          resultR,
-          `\n\n[Scaduto: nessun SL/TP toccato entro 4 ore. Chiuso al prezzo corrente, risultato reale ${resultR}R.]`
-        );
+
+        // L'ESITO dipende da cosa e' successo prima della scadenza:
+        //
+        //  - se il trade aveva gia' toccato TP1 e stava inseguendo TP2
+        //    (uscitaDopoTp1), un target E' stato raggiunto: e' una VINCITA,
+        //    e lo stop mobile garantiva comunque almeno 1.5R. Registrarla
+        //    come BREAKEVEN abbasserebbe il tasso di successo proprio sui
+        //    trade andati bene -- l'esatto contrario di quello che e'
+        //    accaduto sul mercato.
+        //
+        //  - altrimenti resta BREAKEVEN: ne' stop ne' target toccati, il
+        //    trade e' semplicemente scaduto a meta' strada.
+        const esitoScadenza = uscitaDopoTp1 ? "WIN" : "BREAKEVEN";
+        const nota = uscitaDopoTp1
+          ? `\n\n[Scaduto dopo aver raggiunto TP1: era in inseguimento verso TP2, chiuso al prezzo corrente con ${resultR}R.]`
+          : `\n\n[Scaduto: nessun SL/TP toccato entro 4 ore. Chiuso al prezzo corrente, risultato reale ${resultR}R.]`;
+
+        await closeSignal(latest.id, esitoScadenza, resultR, nota);
       } else if (!force) {
-        // Il trade e' ancora vivo: nessun segnale nuovo da generare, ma il
-        // ciclo NON esce qui. Prima usciva, e per tutta la durata del trade
-        // -- fino a 4 ore -- memoria candele, eventi di struttura e contesto
-        // restavano fermi: alla chiusura l'analisi ripartiva da un buco.
-        //
-        // Qui si alza solo un flag; l'uscita vera avviene piu' in basso,
-        // dopo il monitor, insieme a quelle per l'attesa e per la pausa.
-        //
-        // Spariva anche uno spreco: qui si scaricava e salvava uno snapshot
-        // apposta, mentre il flusso normale lo fa comunque poco piu' sotto.
-        // Era una chiamata di rete in piu' a ogni ciclo di ogni trade.
-        tradeAttivoDaSeguire = true;
+        try {
+          const freshSnapshot = await getMarketSnapshot();
+          await insertMarketSnapshot(freshSnapshot);
+        } catch (err) {
+          console.error("[runAnalysis] snapshot di aggiornamento (trade aperto) fallito:", err);
+        }
+
+        return {
+          skipped: true,
+          reason: "signal_active",
+          activeSignalId: latest.id,
+          direction: latest.direction,
+          entry: currentPrice !== null ? entry : Number(latest.entry),
+          currentPrice: currentPrice ?? undefined,
+        };
       }
     }
   }
 
-  // NOTA: il controllo sui segnali IN ATTESA non sta qui, ma piu' in basso
-  // insieme a quello della modalita' sonno (cerca "signal_pending").
-  //
-  // Prima era qui, prima di getMarketSnapshot: serviva a impedire che l'AI
-  // generasse un secondo segnale mentre il primo aspettava ancora il suo
-  // prezzo, e quello continua a funzionare. Ma uscire cosi' presto
-  // significava anche che per un massimo di 90 minuti il sistema smetteva di
-  // aggiornare candele chiuse, eventi di struttura e contesto -- lo stesso
-  // buco che la modalita' sonno era stata scritta per evitare. Non si era
-  // mai visto perche' nessun segnale restava davvero in attesa: la
-  // migrazione di attivato_il li attivava tutti d'ufficio.
-  //
-  // Ora il monitor gira sempre fino in fondo, e l'attesa ferma soltanto la
-  // parte a pagamento, esattamente come la pausa.
+
+  // Un segnale ANCORA IN ATTESA (nessun trade attivo, ma un ordine limite
+  // gia' piazzato) blocca la generazione qui, PRIMA di scaricare uno snapshot
+  // e valutare un nuovo setup. Senza questa uscita esplicita, hasOpenTrade
+  // segnava correttamente il blocco ma il flusso proseguiva comunque: con un
+  // ciclo sfortunato l'AI poteva essere chiamata e generare un secondo
+  // segnale mentre il primo aspettava ancora il suo prezzo.
+  if (attesaPendente && !force) {
+    return {
+      skipped: true,
+      reason: "signal_pending",
+      note: "Un segnale e' in attesa che il prezzo tocchi l'entry: nessuna nuova generazione finche' non si attiva o scade.",
+    };
+  }
 
   const marketSnapshot = await getMarketSnapshot();
 
@@ -685,7 +954,12 @@ export async function runAnalysis(options?: { force?: boolean }) {
       currentPrice === null
         ? "\n\n[Chiuso manualmente: nuova generazione richiesta dall'utente, prezzo attuale non verificabile, risultato non misurabile.]"
         : "\n\n[Chiuso manualmente: sostituito da una nuova generazione richiesta dall'utente. Risultato reale " + resultR + "R al momento della chiusura.]";
-    await closeSignal(latest.id, "BREAKEVEN", resultR, note);
+
+    // Stesso criterio della scadenza: se il trade aveva gia' toccato TP1 ed
+    // era in inseguimento verso TP2, un target E' stato raggiunto -- e' una
+    // vincita, non un pareggio, anche se sei tu a chiuderlo. Altrimenti
+    // resta BREAKEVEN: interrotto prima che decidesse.
+    await closeSignal(latest.id, uscitaDopoTp1 ? "WIN" : "BREAKEVEN", resultR, note);
   }
 
   // Anche i segnali IN ATTESA vanno chiusi quando si forza una nuova
@@ -893,44 +1167,6 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   // Da qui in poi si spendono soldi: news, calendario e chiamata AI.
   // In pausa il ciclo si ferma esattamente qui, con il monitor gia' aggiornato.
-  //
-  // Le tre uscite qui sotto condividono la stessa logica: c'e' una ragione
-  // per non generare un segnale nuovo, ma il monitor deve aver finito il suo
-  // lavoro prima di fermarsi -- cosi' quando la ragione viene meno l'analisi
-  // riparte da un quadro completo invece che da un buco.
-  //
-  // Un trade APERTO e' la prima: finche' e' vivo non serve un altro segnale,
-  // e puo' restare vivo fino a 4 ore.
-  if (tradeAttivoDaSeguire && latest) {
-    return {
-      skipped: true,
-      reason: "signal_active",
-      activeSignalId: latest.id,
-      direction: latest.direction,
-      entry: currentPrice !== null ? entry : Number(latest.entry),
-      currentPrice: currentPrice ?? undefined,
-      monitorAggiornato: true,
-      eventiAttivi: eventiAttivi.length,
-      zoneOccupate: zoneOccupate.length,
-      controllatoIl: new Date().toISOString(),
-    };
-  }
-
-  // Un segnale IN ATTESA si ferma nello stesso punto e per la stessa
-  // ragione: finche' quel segnale non si attiva o non scade non ha senso
-  // generarne un altro, ma il monitor deve continuare a lavorare.
-  if (attesaPendente && !force) {
-    return {
-      skipped: true,
-      reason: "signal_pending",
-      note: "Un segnale e' in attesa che il prezzo tocchi l'entry: nessuna nuova generazione finche' non si attiva o scade.",
-      monitorAggiornato: true,
-      eventiAttivi: eventiAttivi.length,
-      zoneOccupate: zoneOccupate.length,
-      controllatoIl: new Date().toISOString(),
-    };
-  }
-
   if (inPausa) {
     return {
       skipped: true,
@@ -1152,35 +1388,17 @@ export async function runAnalysis(options?: { force?: boolean }) {
   await setSetting("setup_last_signal_id", saved.id);
 
   if (signal.direction === "BUY" || signal.direction === "SELL") {
-    // NOTIFICA IMMEDIATA ALLA NASCITA (03/09) -- sistema pendente RIMOSSO.
+    // NESSUNA NOTIFICA ALLA NASCITA (02/09).
     //
-    // Per un giorno il segnale nasceva IN ATTESA e la notifica partiva solo
-    // al tocco dell'entry. L'intento era non registrare come vinti o persi
-    // trade mai eseguiti, ma il rimedio era peggiore del male: un segnale in
-    // attesa bloccava la generazione di nuovi segnali, e il sistema e'
-    // rimasto muto 75 minuti mentre il prezzo si muoveva di 18 dollari nella
-    // direzione opposta.
-    //
-    // Chi opera con ordini limite non ha bisogno di quell'attesa: ricevere
-    // subito entry, stop e target permette di piazzare l'ordine sul broker e
-    // lasciare che sia lui ad aspettare il prezzo. Il segnale nasce quindi
-    // gia' attivo (attivato_il e' scritto dentro l'INSERT, vedi
-    // insertSignal) e la notifica parte adesso.
-    const prezzoOra = Number(marketSnapshot.xauusd);
-    sendPushToAll({
-      title: `${signal.direction} · prezzo ${prezzoOra.toFixed(2)}`,
-      body: `Entry ${Number(signal.entry).toFixed(2)} · SL ${Number(signal.stopLoss).toFixed(
-        2
-      )} · TP1 ${Number(signal.tp1).toFixed(2)} · TP2 ${Number(signal.tp2).toFixed(
-        2
-      )} · Conf ${signal.confidence}%`,
-      url: "/",
-    }).catch((err) => console.error("[runAnalysis] invio push fallito:", err));
-
+    // Il segnale nasce IN ATTESA: l'entry e' il bordo della zona di pullback
+    // e il prezzo spesso deve ancora tornarci. Avvisare adesso significava
+    // mandare un trade non eseguibile, con il prezzo che nel frattempo si
+    // muove. La notifica parte ora dal blocco di ATTIVAZIONE, nel ciclo in
+    // cui il prezzo tocca davvero l'entry -- una sola, nel momento giusto.
     console.log(
-      `[runAnalysis] segnale ${saved.id} creato e notificato: ${signal.direction} entry ${Number(
+      `[runAnalysis] segnale ${saved.id} creato in attesa: ${signal.direction} entry ${Number(
         signal.entry
-      ).toFixed(2)}, prezzo ${prezzoOra.toFixed(2)}`
+      ).toFixed(2)}, prezzo ${Number(marketSnapshot.xauusd).toFixed(2)}`
     );
   }
 
@@ -1203,3 +1421,172 @@ export async function runAnalysis(options?: { force?: boolean }) {
   };
 }
 
+export async function runAnalysis5m(options?: { force?: boolean }) {
+  const force = options?.force ?? false;
+
+  if (!isMarketOpen()) {
+    return { skipped: true, reason: "market_closed" };
+  }
+
+  await ensureSchema();
+
+  if (await isAiPaused()) {
+    return { skipped: true, reason: "ai_paused" };
+  }
+
+  const latest = await getLatestSignal5m();
+  const hasOpenTrade =
+    latest && (latest.direction === "BUY" || latest.direction === "SELL") && !latest.outcome;
+
+  let currentPrice: number | null = null;
+  let naturalOutcome: "WIN" | "LOSS" | null = null;
+  let entry = 0;
+  let stopLoss = 0;
+  let tp1 = 0;
+  let risk = 0;
+
+  let expired5m = false;
+
+  if (hasOpenTrade) {
+    currentPrice = await getCurrentPrice();
+
+    if (currentPrice !== null) {
+      entry = Number(latest.entry);
+      stopLoss = Number(latest.stop_loss);
+      tp1 = Number(latest.tp1);
+      risk = Math.abs(entry - stopLoss);
+
+      if (latest.direction === "BUY") {
+        if (currentPrice <= stopLoss) naturalOutcome = "LOSS";
+        else if (currentPrice >= tp1) naturalOutcome = "WIN";
+      } else {
+        if (currentPrice >= stopLoss) naturalOutcome = "LOSS";
+        else if (currentPrice <= tp1) naturalOutcome = "WIN";
+      }
+    }
+
+    if (naturalOutcome) {
+      const resultR =
+        naturalOutcome === "WIN"
+          ? (latest.direction === "BUY" ? currentPrice! - entry : entry - currentPrice!) / risk
+          : -1;
+      await closeSignal5m(latest.id, naturalOutcome, resultR);
+    } else {
+      const ageMs = Date.now() - new Date(latest.created_at).getTime();
+      expired5m = ageMs > SIGNAL_TIMEOUT_MS_5M;
+
+      if (expired5m) {
+        await closeSignal5m(
+          latest.id,
+          "BREAKEVEN",
+          0,
+          "\n\n[Scaduto: nessun SL/TP toccato entro 1 ora, chiuso automaticamente per sbloccare nuovi segnali.]"
+        );
+      } else if (!force) {
+        try {
+          const freshSnapshot = await getMarketSnapshot();
+          await insertMarketSnapshot(freshSnapshot);
+        } catch (err) {
+          console.error("[runAnalysis5m] snapshot di aggiornamento (trade aperto) fallito:", err);
+        }
+
+        return {
+          skipped: true,
+          reason: "signal_active",
+          activeSignalId: latest.id,
+          direction: latest.direction,
+          entry: currentPrice !== null ? entry : Number(latest.entry),
+          currentPrice: currentPrice ?? undefined,
+        };
+      }
+    }
+  }
+
+  const marketSnapshot = await getMarketSnapshot();
+
+  if (hasOpenTrade && !naturalOutcome && !expired5m && force) {
+    const note =
+      currentPrice === null
+        ? "\n\n[Chiuso manualmente: nuova generazione richiesta dall'utente, prezzo attuale non verificabile.]"
+        : "\n\n[Chiuso manualmente: sostituito da una nuova generazione richiesta dall'utente.]";
+    await closeSignal5m(latest!.id, "BREAKEVEN", 0, note);
+  }
+
+  await insertMarketSnapshot(marketSnapshot);
+
+  const [news, calendar] = await Promise.all([
+    getRelevantNews().catch(() => []),
+    getEconomicCalendar().catch(() => []),
+  ]);
+  await insertContextSnapshot(news, calendar);
+
+  const gate = shouldCallAI(marketSnapshot.session.sessione === "asia", calendar, news);
+  if (!gate.allowed) {
+    const skippedSignal = validateSignal(
+      {
+        direction: "NO_TRADE",
+        entry: null,
+        stopLoss: null,
+        tp1: null,
+        tp2: null,
+        riskReward: null,
+        confidence: 0,
+        reasoning: gate.reason,
+      },
+      "atr5m"
+    );
+    const saved = await insertSignal5m(skippedSignal);
+    return {
+      signalId: saved.id,
+      direction: skippedSignal.direction,
+      confidence: skippedSignal.confidence,
+      xauusd: marketSnapshot.xauusd,
+      atr5m: marketSnapshot.atr5m,
+      dxySource: marketSnapshot.dxySource,
+      us10ySource: marketSnapshot.us10ySource,
+      newsCount: news.length,
+      newsAsia: news.filter((n) => n.area === "asia").length,
+      calendarCount: calendar.length,
+      dataSource: marketSnapshot.source,
+      rejectedReason: gate.reason,
+      aiSkipped: true,
+    };
+  }
+
+  const rawSignal = await generateSignal5m({ marketSnapshot, news, calendar });
+  const signal = validateSignal(rawSignal, "atr5m");
+  const saved = await insertSignal5m(signal);
+
+  if (signal.direction === "BUY" || signal.direction === "SELL") {
+    const ingresso = distanzaIngresso(
+      signal.direction,
+      Number(signal.entry),
+      marketSnapshot.xauusd,
+      marketSnapshot.atr5m ?? null
+    );
+
+    sendPushToAll({
+      title: `Nuovo segnale veloce: ${signal.direction}`,
+      body: `${ingresso.testo} · SL ${Number(signal.stopLoss).toFixed(2)} · Conf ${signal.confidence}%`,
+      url: "/",
+    }).catch((err) => console.error("[runAnalysis5m] invio push fallito:", err));
+  }
+
+
+  return {
+    signalId: saved.id,
+    direction: signal.direction,
+    confidence: signal.confidence,
+    xauusd: marketSnapshot.xauusd,
+    atr5m: marketSnapshot.atr5m,
+    rotturaInAtr: marketSnapshot.levels5m?.rotturaRialzoInAtr ?? null,
+    stopAtrRatio: signal.stopAtrRatio ?? null,
+    dxySource: marketSnapshot.dxySource,
+    us10ySource: marketSnapshot.us10ySource,
+    newsCount: news.length,
+    newsAsia: news.filter((n) => n.area === "asia").length,
+    calendarCount: calendar.length,
+    dataSource: marketSnapshot.source,
+    rejectedReason: signal.rejectedReason ?? null,
+  };
+}

@@ -47,27 +47,7 @@ export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "a
   }
 
   if (normalized === "NO_TRADE") {
-    // Livelli azzerati (03/09). Prima si restituiva "{ ...raw }", cioe' si
-    // tenevano i numeri che l'AI aveva scritto. Finche' l'AI lasciava quei
-    // campi a zero sui NO_TRADE non si notava, ma da quando le si chiede di
-    // usare il prezzo corrente come entry ha cominciato a compilarli tutti,
-    // e su un NO_TRADE possono descrivere due direzioni opposte insieme:
-    // un caso reale aveva entry 4491.70, TP1 4510.81 (sopra) e TP2 4466.18
-    // (sotto), cioe' il bersaglio rialzista e quello ribassista nello stesso
-    // segnale.
-    //
-    // Su un NO_TRADE non esiste nessun trade, quindi non esistono livelli:
-    // mostrarne di incoerenti in dashboard confonde e basta. La spiegazione
-    // resta, ed e' li' che si legge cosa ha visto l'AI.
-    return {
-      ...raw,
-      direction: "NO_TRADE",
-      entry: 0,
-      stopLoss: 0,
-      tp1: 0,
-      tp2: 0,
-      riskReward: 0,
-    };
+    return { ...raw, direction: "NO_TRADE" };
   }
 
   const { entry, stopLoss, tp1 } = raw;

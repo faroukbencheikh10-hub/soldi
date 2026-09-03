@@ -16,7 +16,11 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: "/icon-192.png",
-    apple: "/icon-192.png",
+    // iOS usa questa per la schermata Home e vuole 180x180 senza
+    // trasparenza: gli angoli arrotondati li aggiunge lui. Puntava a
+    // icon-192.png, che ora e' della dimensione giusta ma non di QUELLA
+    // dimensione -- meglio un file dedicato.
+    apple: "/apple-icon.png",
   },
 };
 

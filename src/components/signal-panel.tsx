@@ -4,9 +4,16 @@ import { formatRecency } from "@/lib/formatTime";
 
 // Riquadro di stato dell'ingresso: RIMOSSO (02/09).
 //
-// Non serve piu': da questa versione il sistema emette solo segnali gia'
-// eseguibili al prezzo corrente, quindi non esistono piu' ordini pendenti
-// da segnalare ne' pullback da inseguire.
+// Mostrava "Eseguibile ora" e "Pullback saltato" confrontando prezzo ed
+// entry. Tolto su richiesta: il pannello riporta gia' entry e prezzo, e il
+// confronto si fa a colpo d'occhio.
+//
+// ATTENZIONE se lo si volesse ripristinare: la vecchia versione di questo
+// commento diceva che "non esistono piu' ordini pendenti perche' il sistema
+// emette solo segnali eseguibili al prezzo corrente". Non e' piu' vero --
+// quella regola e' stata revocata. Oggi un segnale nasce IN ATTESA e diventa
+// un trade solo quando il prezzo tocca l'entry: e' proprio quello che
+// segnala il riquadro InAttesaDiAttivazione qui sotto.
 
 // ---------------------------------------------------------------------------
 // FINESTRA DI CHIUSURA ATTESA
@@ -26,6 +33,13 @@ import { formatRecency } from "@/lib/formatTime";
 //
 // Vanno riviste quando lo storico sara' piu' ampio: sono una fotografia del
 // campione attuale, non una costante del mercato.
+//
+// Una precisazione sulla base statistica: questi minuti furono misurati
+// dalla CREAZIONE alla chiusura, quando i due istanti coincidevano perche'
+// il trade partiva subito. Ora il conteggio parte dall'ATTIVAZIONE, che e'
+// il riferimento corretto (il trade esiste da li'), ma significa che i tre
+// numeri qui sotto vanno riverificati sui trade nuovi: potrebbero risultare
+// piu' corti, perche' non includono piu' l'attesa prima dell'ingresso.
 const CHIUSURA_MEDIANA_MIN = 20;
 const CHIUSURA_TIPICA_MAX_MIN = 61;
 const CHIUSURA_QUASI_SEMPRE_MIN = 100;
@@ -40,12 +54,43 @@ function orario(dataIso: string, minutiDopo: number): string {
   });
 }
 
+// Un segnale non ancora attivato e' un ordine limite: il prezzo non ha
+// toccato l'entry, non e' partita nessuna notifica, e se non ci arriva entro
+// 90 minuti scade senza essere mai stato un trade.
+//
+// Senza questa riga il pannello lo mostrava identico a un trade in corso --
+// stessi livelli, stesso esito vuoto -- e guardando l'app non c'era modo di
+// sapere se il trade fosse vivo o solo in attesa. Solo visualizzazione:
+// legge un campo che il monitor scrive gia' per conto suo.
+function InAttesaDiAttivazione({ signal }: { signal: TradeSignal }) {
+  if (signal.direction === "NO_TRADE" || signal.outcome) return null;
+  if (signal.attivatoIl) return null;
+
+  return (
+    <div className="mb-3 rounded-lg border border-gold/30 bg-gold/10 px-3 py-2.5">
+      <div className="text-[10px] uppercase tracking-wide text-gold">In attesa</div>
+      <p className="text-[11px] text-muted mt-1 leading-snug">
+        Ordine limite a {signal.entry.toFixed(2)}: il prezzo non l&apos;ha ancora raggiunto, il
+        trade non e&apos; partito. La notifica arriva quando lo tocca.
+      </p>
+    </div>
+  );
+}
+
 function ChiusuraAttesa({ signal }: { signal: TradeSignal }) {
   // Solo per trade veri e ancora aperti: a esito noto la stima non serve piu'.
   if (signal.direction === "NO_TRADE" || signal.outcome) return null;
-  if (!signal.createdAt || isNaN(new Date(signal.createdAt).getTime())) return null;
 
-  const trascorsi = Math.floor((Date.now() - new Date(signal.createdAt).getTime()) / 60000);
+  // Niente stima finche' il trade non e' partito: un segnale in attesa non ha
+  // ancora un orologio da far correre, e mostrare "chiusura attesa alle 22:21"
+  // accanto al riquadro che dice "il trade non e' partito" sarebbe una
+  // contraddizione. La stima parte dall'ATTIVAZIONE, non dalla creazione:
+  // e' da li' che il trade esiste, ed e' da li' che i tempi dello storico
+  // sono stati misurati.
+  const riferimento = signal.attivatoIl;
+  if (!riferimento || isNaN(new Date(riferimento).getTime())) return null;
+
+  const trascorsi = Math.floor((Date.now() - new Date(riferimento).getTime()) / 60000);
   const oltreLaNorma = trascorsi > CHIUSURA_QUASI_SEMPRE_MIN;
 
   return (
@@ -59,8 +104,8 @@ function ChiusuraAttesa({ signal }: { signal: TradeSignal }) {
       ) : (
         <>
           <div className="font-mono text-sm text-text mt-0.5">
-            tra le {orario(signal.createdAt, CHIUSURA_MEDIANA_MIN)} e le{" "}
-            {orario(signal.createdAt, CHIUSURA_TIPICA_MAX_MIN)}
+            tra le {orario(riferimento, CHIUSURA_MEDIANA_MIN)} e le{" "}
+            {orario(riferimento, CHIUSURA_TIPICA_MAX_MIN)}
           </div>
           <p className="text-[11px] text-muted mt-1 leading-snug">
             Meta&apos; dei trade chiude entro {CHIUSURA_MEDIANA_MIN} min, tre quarti entro
@@ -142,6 +187,7 @@ export function SignalPanel({ signal }: { signal: TradeSignal | null }) {
         </div>
       </div>
 
+      <InAttesaDiAttivazione signal={signal} />
       <ChiusuraAttesa signal={signal} />
 
       <div className="grid grid-cols-3 gap-2 mb-3">

@@ -3,6 +3,7 @@ import { ChartPanel } from "@/components/chart-panel";
 import { SignalPanel } from "@/components/signal-panel";
 import { GenerateSignalButton } from "@/components/generate-signal-button";
 import { AiPauseToggle } from "@/components/ai-pause-toggle";
+import { ChiamateToggle } from "@/components/chiamate-toggle";
 import { SignalHistory } from "@/components/signal-history";
 import { MacroContext } from "@/components/macro-context";
 import { MarketHoursCompact } from "@/components/market-hours-compact";
@@ -36,6 +37,7 @@ function mapSignalRow(row: any): TradeSignal {
     reasoning: row.reasoning,
     outcome: row.outcome ?? undefined,
     resultR: row.result_r !== null ? Number(row.result_r) : undefined,
+    attivatoIl: row.attivato_il ?? null,
     isDemo: false,
   };
 }
@@ -138,6 +140,7 @@ export default async function Home() {
 
           <div className="space-y-5">
             <AiPauseToggle />
+            <ChiamateToggle />
             <GenerateSignalButton />
             <SignalPanel signal={currentSignal} />
             <MacroContext dxy={dxyQuote} us10y={us10yQuote} />
@@ -147,11 +150,11 @@ export default async function Home() {
           </div>
         </div>
 
-        {/* Canale "trade veloce" (5m) RIMOSSO il 03/09: prompt, motore,
-            rotte e funzioni di accesso non esistono piu'. La tabella
-            signals_5m resta nel database con il suo storico -- pochi
-            segnali, nessuno con esito -- perche' cancellarla sarebbe
-            irreversibile e non guadagnerebbe nulla. */}
+        {/* Canale "trade veloce" (5m): sezione rimossa dalla dashboard su
+            richiesta -- non serve per ora. Backend/dati invariati (tabella
+            signals_5m, route /api/generate-5m, cron gia' disattivato in
+            /api/cron/analyze-5m), cosi' e' facile da riattivare in futuro
+            senza perdere storico. */}
 
       </main>
     </>
