@@ -122,8 +122,29 @@ export async function ensureSchema() {
     -- Le righe gia' esistenti vengono considerate attivate alla creazione,
     -- cosi' lo storico resta coerente e le statistiche non cambiano.
     ALTER TABLE signals ADD COLUMN IF NOT EXISTS attivato_il TIMESTAMPTZ;
+    -- ATTENZIONE alla clausola sulla data: senza, questa UPDATE distrugge il
+    -- meccanismo che dovrebbe abilitare.
+    --
+    -- ensureSchema() gira a OGNI ciclo, non una volta sola. Una UPDATE che
+    -- filtra solo su "attivato_il IS NULL" colpisce esattamente i segnali IN
+    -- ATTESA -- che hanno attivato_il nullo proprio perche' il prezzo non ha
+    -- ancora toccato l'entry -- e li marca come attivati d'ufficio al primo
+    -- ciclo dopo la nascita.
+    --
+    -- E' quello che e' successo dal 02/09 al 03/09: ogni segnale risultava
+    -- attivato nello stesso istante in cui nasceva (zero minuti di attesa in
+    -- tutte le righe), e la notifica partiva subito con un'entry che il
+    -- prezzo doveva ancora raggiungere -- per esempio un SELL con entry
+    -- 4432.36 notificato mentre il prezzo era 4429.99, cioe' 2,37 dollari
+    -- sotto il livello da cui si sarebbe dovuto vendere.
+    --
+    -- Il limite temporale confina la migrazione al suo scopo vero: le righe
+    -- gia' esistenti quando la colonna e' stata introdotta. I segnali nati
+    -- dopo restano in attesa finche' e' il monitor ad attivarli davvero,
+    -- guardando il prezzo.
     UPDATE signals SET attivato_il = created_at
-      WHERE attivato_il IS NULL AND direction IN ('BUY','SELL');
+      WHERE attivato_il IS NULL AND direction IN ('BUY','SELL')
+        AND created_at < TIMESTAMPTZ '2026-09-02 18:00:00+00';
 
     ALTER TABLE setup_events DROP CONSTRAINT IF EXISTS setup_events_timeframe_check;
     ALTER TABLE setup_events ADD CONSTRAINT setup_events_timeframe_check

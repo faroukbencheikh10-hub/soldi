@@ -526,6 +526,9 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   let currentPrice: number | null = null;
   let naturalOutcome: "WIN" | "LOSS" | null = null;
+  // Alzato quando c'e' un trade aperto da seguire: l'uscita non avviene
+  // piu' dentro il blocco di monitoraggio, ma dopo che il monitor ha finito.
+  let tradeAttivoDaSeguire = false;
   let entry = 0;
   let stopLoss = 0;
   let tp1 = 0;
@@ -598,39 +601,36 @@ export async function runAnalysis(options?: { force?: boolean }) {
           `\n\n[Scaduto: nessun SL/TP toccato entro 4 ore. Chiuso al prezzo corrente, risultato reale ${resultR}R.]`
         );
       } else if (!force) {
-        try {
-          const freshSnapshot = await getMarketSnapshot();
-          await insertMarketSnapshot(freshSnapshot);
-        } catch (err) {
-          console.error("[runAnalysis] snapshot di aggiornamento (trade aperto) fallito:", err);
-        }
-
-        return {
-          skipped: true,
-          reason: "signal_active",
-          activeSignalId: latest.id,
-          direction: latest.direction,
-          entry: currentPrice !== null ? entry : Number(latest.entry),
-          currentPrice: currentPrice ?? undefined,
-        };
+        // Il trade e' ancora vivo: nessun segnale nuovo da generare, ma il
+        // ciclo NON esce qui. Prima usciva, e per tutta la durata del trade
+        // -- fino a 4 ore -- memoria candele, eventi di struttura e contesto
+        // restavano fermi: alla chiusura l'analisi ripartiva da un buco.
+        //
+        // Qui si alza solo un flag; l'uscita vera avviene piu' in basso,
+        // dopo il monitor, insieme a quelle per l'attesa e per la pausa.
+        //
+        // Spariva anche uno spreco: qui si scaricava e salvava uno snapshot
+        // apposta, mentre il flusso normale lo fa comunque poco piu' sotto.
+        // Era una chiamata di rete in piu' a ogni ciclo di ogni trade.
+        tradeAttivoDaSeguire = true;
       }
     }
   }
 
-
-  // Un segnale ANCORA IN ATTESA (nessun trade attivo, ma un ordine limite
-  // gia' piazzato) blocca la generazione qui, PRIMA di scaricare uno snapshot
-  // e valutare un nuovo setup. Senza questa uscita esplicita, hasOpenTrade
-  // segnava correttamente il blocco ma il flusso proseguiva comunque: con un
-  // ciclo sfortunato l'AI poteva essere chiamata e generare un secondo
-  // segnale mentre il primo aspettava ancora il suo prezzo.
-  if (attesaPendente && !force) {
-    return {
-      skipped: true,
-      reason: "signal_pending",
-      note: "Un segnale e' in attesa che il prezzo tocchi l'entry: nessuna nuova generazione finche' non si attiva o scade.",
-    };
-  }
+  // NOTA: il controllo sui segnali IN ATTESA non sta qui, ma piu' in basso
+  // insieme a quello della modalita' sonno (cerca "signal_pending").
+  //
+  // Prima era qui, prima di getMarketSnapshot: serviva a impedire che l'AI
+  // generasse un secondo segnale mentre il primo aspettava ancora il suo
+  // prezzo, e quello continua a funzionare. Ma uscire cosi' presto
+  // significava anche che per un massimo di 90 minuti il sistema smetteva di
+  // aggiornare candele chiuse, eventi di struttura e contesto -- lo stesso
+  // buco che la modalita' sonno era stata scritta per evitare. Non si era
+  // mai visto perche' nessun segnale restava davvero in attesa: la
+  // migrazione di attivato_il li attivava tutti d'ufficio.
+  //
+  // Ora il monitor gira sempre fino in fondo, e l'attesa ferma soltanto la
+  // parte a pagamento, esattamente come la pausa.
 
   const marketSnapshot = await getMarketSnapshot();
 
@@ -897,6 +897,44 @@ export async function runAnalysis(options?: { force?: boolean }) {
 
   // Da qui in poi si spendono soldi: news, calendario e chiamata AI.
   // In pausa il ciclo si ferma esattamente qui, con il monitor gia' aggiornato.
+  //
+  // Le tre uscite qui sotto condividono la stessa logica: c'e' una ragione
+  // per non generare un segnale nuovo, ma il monitor deve aver finito il suo
+  // lavoro prima di fermarsi -- cosi' quando la ragione viene meno l'analisi
+  // riparte da un quadro completo invece che da un buco.
+  //
+  // Un trade APERTO e' la prima: finche' e' vivo non serve un altro segnale,
+  // e puo' restare vivo fino a 4 ore.
+  if (tradeAttivoDaSeguire && latest) {
+    return {
+      skipped: true,
+      reason: "signal_active",
+      activeSignalId: latest.id,
+      direction: latest.direction,
+      entry: currentPrice !== null ? entry : Number(latest.entry),
+      currentPrice: currentPrice ?? undefined,
+      monitorAggiornato: true,
+      eventiAttivi: eventiAttivi.length,
+      zoneOccupate: zoneOccupate.length,
+      controllatoIl: new Date().toISOString(),
+    };
+  }
+
+  // Un segnale IN ATTESA si ferma nello stesso punto e per la stessa
+  // ragione: finche' quel segnale non si attiva o non scade non ha senso
+  // generarne un altro, ma il monitor deve continuare a lavorare.
+  if (attesaPendente && !force) {
+    return {
+      skipped: true,
+      reason: "signal_pending",
+      note: "Un segnale e' in attesa che il prezzo tocchi l'entry: nessuna nuova generazione finche' non si attiva o scade.",
+      monitorAggiornato: true,
+      eventiAttivi: eventiAttivi.length,
+      zoneOccupate: zoneOccupate.length,
+      controllatoIl: new Date().toISOString(),
+    };
+  }
+
   if (inPausa) {
     return {
       skipped: true,
