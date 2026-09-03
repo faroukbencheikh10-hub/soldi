@@ -20,6 +20,7 @@ import {
   salvaCandeleMemoria,
   pulisciCandeleMemoria,
 } from "@/lib/server/db";
+import { generateSignal, generaScenarioNotizia } from "@/lib/server/agent";
 import { getMarketSnapshot, getCurrentPrice, isMarketOpen, type MarketSnapshot } from "@/lib/server/marketData";
 import { metaApiFetchTimeSeries } from "@/lib/server/metaApiData";
 import { getRelevantNews } from "@/lib/server/news";
