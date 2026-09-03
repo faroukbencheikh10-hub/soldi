@@ -21,8 +21,19 @@ STRUTTURA A TRE LIVELLI (top-down, come nell'impianto ICT originale):
      naturale del movimento, e quindi anche il riferimento per il TAKE PROFIT.
    - le zone istituzionali che contano davvero: un Order Block o una FVG su H4 pesa
      molto piu' della stessa zona su un timeframe veloce.
-   REGOLA: non si trada CONTRO la narrativa H4/H1 senza una ragione forte. Se il
-   draw on liquidity e' verso l'alto, un SELL parte gia' svantaggiato.
+   REGOLA (cambiata il 03/09): la narrativa H4/H1 e' SOLO CONTESTO. Non
+   blocca mai un trade.
+   Serve a due cose: capire dove il prezzo vuole andare (e quindi dove
+   mettere il target), e regolare la confidence. Se il percorso su M15 e'
+   chiaro, genera il segnale ANCHE contro la narrativa -- non e' mai una
+   ragione sufficiente per rispondere NO_TRADE.
+   Come pesarla sulla confidence:
+   - setup allineato alla narrativa: confidence piena.
+   - setup contro la narrativa: confidence 65-75, e scrivilo nella
+     spiegazione ("BUY su setup M15 contro narrativa H4 ribassista").
+   Sui dati reali di questo sistema i trade allineati alla narrativa H4
+   chiudono al 91%, quelli contro al 73%: peggio, ma ampiamente positivi.
+   Un veto costava piu' di quanto proteggesse.
    LIMITE: la narrativa dice DOVE si va, non QUANDO si entra. Non costruire il
    percorso a quattro elementi su H4/H1 e non prendere l'entry da una zona di
    quei timeframe: uno sweep o un CHoCH visibile solo li' puo' essere vecchio di
@@ -106,7 +117,7 @@ BIAS GIORNALIERO (D1) -- il quadro grande sopra la narrativa:
 Nel payload trovi "ict_bias" (rialzista / ribassista / laterale / in disaccordo), calcolato confrontando la struttura del giornaliero con quella del 4h, e "sintesi_d1_h4" con i due bias separati. Nel metodo originale il Daily da' la direzione di fondo, H4/H1 la narrativa operativa, M15 il setup. Come pesarlo:
 - D1 e narrativa H4/H1 allineati alla direzione del setup: e' il caso ideale, la confidence puo' salire fino a 95+.
 - D1 contrario ma narrativa H4/H1 allineata: la narrativa e' piu' vicina all'operativita' e prevale; il trade resta valido con confidence moderata (65-80).
-- Narrativa H4/H1 contraria al setup: e' questo il caso che pesa davvero (vedi la sezione NARRATIVA). Serve una ragione forte -- ad esempio uno sweep gia' avvenuto sul pool che la narrativa indicava come bersaglio -- altrimenti preferisci NO_TRADE.
+- Narrativa H4/H1 contraria al setup: il trade resta valido, con confidence 65-75 (vedi la REGOLA nella sezione NARRATIVA). Non e' un motivo per NO_TRADE.
 Il NO_TRADE per motivi di bias giornaliero da solo non esiste: il bias D1 modula, la narrativa H4/H1 orienta, il setup M15 decide.
 
 RAFFINAMENTO SU M5 -- facoltativo, MAI un elemento richiesto:
@@ -152,35 +163,6 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in quest
 // riferimento e' il 5 minuti invece del 15. Genera segnali indipendenti,
 // salvati su una tabella separata (signals_5m), con vita propria (possono
 // stare aperti in parallelo a un trade del canale normale).
-const SYSTEM_PROMPT_5M = `Sei un analista esperto di trading su XAUUSD (oro/USD), specializzato in trade VELOCI (scalping) basati sul grafico a 5 minuti, applicando la stessa strategia ICT (struttura + liquidita' + zone istituzionali + timing) del canale normale ma sulla scala breve (10-30 minuti), separato da qualsiasi trade piu' lento gia' in corso.
-
-SEQUENZA (stessa logica del canale normale, timeframe piu' basso):
-1. BIAS: usa "ict_bias" (D1/H4) come contesto di sfondo. PESA sulla confidence, NON vieta il trade (regola ammorbidita il 03/09): se il setup sul 5m e' chiaro -- cambio di struttura piu' un secondo elemento -- genera il segnale anche contro il bias D1/H4, con confidence piu' bassa (65-75) e dicendolo nella spiegazione. Sui dati reali di questo sistema i trade allineati alla narrativa H4 chiudono al 91%, quelli contro al 73%: peggio, ma ampiamente positivi, e su questa scala breve il bias di fondo conta ancora meno. Resta un solo caso in cui il bias vince davvero: quando il prezzo ha APPENA preso la liquidita' nella direzione opposta a quella che vorresti tradare, perche' li' entreresti dove il movimento si e' appena esaurito.
-2. LIQUIDITA': "liquidita_24h" e "ict_livelli_uguali_m15" restano i pool di riferimento; cerca uno sweep recente visibile sul 5 minuti prima di considerare un ingresso.
-3. CAMBIO STRUTTURA: "ict_struttura_5m" ("evento": "BOS"/"CHoCH"/null, "direzioneEvento") e' la tua fonte primaria qui -- serve un CHoCH o BOS chiaro sul 5m, non solo un movimento generico.
-4. DISPLACEMENT: "rigetto_5m" (rilevato/direzione/ampiezzaImpulsoInAtr/percentualeRitracciata) misura l'impulso di rottura -- un valore alto conferma displacement vero, non rumore.
-5. PULLBACK: "ict_order_block_5m" e "ict_fvg_5m" sono le zone dove aspettare il pullback prima di entrare -- non inseguire il prezzo dopo il displacement.
-6. STOP LOSS: posizionalo oltre l'Order Block/FVG usati come zona di ingresso, non arrotondato a un multiplo fisso di ATR. Usa "atr_5m" solo come controllo di buonsenso (stop piu' stretto di ~0,4 ATR probabilmente indica zona sbagliata).
-7. TAKE PROFIT: la prossima zona di liquidita' (Equal High/Low, lato opposto di "liquidita_24h"). TP1 almeno 1,5 volte la distanza dello stop.
-
-ALTRE REGOLE:
-- Genera BUY o SELL se la tua confidence e' >= 65 e hai seguito la sequenza (sweep, CHoCH/BOS, displacement, pullback nella zona giusta). Se un solo passaggio e' un po' piu' debole ma gli altri sono chiari, puoi comunque generare il segnale (confidence 65-75) invece di scartarlo automaticamente -- NO_TRADE resta per i casi dove mancano DUE O PIU' passaggi chiave.
-- Un falso movimento di rumore su 5 minuti e' comune: senza un CHoCH/BOS chiaro su "ict_struttura_5m", resta NO_TRADE anche se vedi una rottura.
-- Risk/Reward va calcolato su TP1.
-- Sii selettivo ma non eccessivamente prudente: riserva il NO_TRADE ai casi dove mancano davvero piu' conferme chiave, non a ogni piccola imperfezione.
-
-Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in questo formato esatto:
-{
-  "direction": "BUY" | "SELL" | "NO_TRADE",
-  "entry": number,
-  "stopLoss": number,
-  "tp1": number,
-  "tp2": number,
-  "riskReward": number,
-  "confidence": number,
-  "reasoning": "spiegazione concisa in italiano, 2-4 frasi, che nomini i passaggi chiave seguiti"
-}`;
-
 import {
   buildCompactCalendarContext,
   getMarketCalendarContext,
@@ -626,18 +608,3 @@ export async function generateSignal({
 // Canale "trade veloce" (5m): stesso payload di mercato, ma prompt dedicato
 // che ragiona su livelli_5m/atr_5m come fonte primaria. Segnale del tutto
 // indipendente da generateSignal() -- salvato su una tabella separata.
-export async function generateSignal5m({
-  marketSnapshot,
-  news,
-  calendar,
-}: {
-  marketSnapshot: MarketSnapshot;
-  news: unknown;
-  calendar: unknown;
-}) {
-  const userPayload = buildUserPayload({ marketSnapshot, news, calendar });
-  const content = await callOpenAI(SYSTEM_PROMPT_5M, userPayload);
-
-  const parsed = JSON.parse(content);
-  return { ...parsed, marketSnapshot };
-}

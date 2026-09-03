@@ -147,11 +147,11 @@ export default async function Home() {
           </div>
         </div>
 
-        {/* Canale "trade veloce" (5m): sezione rimossa dalla dashboard su
-            richiesta -- non serve per ora. Backend/dati invariati (tabella
-            signals_5m, route /api/generate-5m, cron gia' disattivato in
-            /api/cron/analyze-5m), cosi' e' facile da riattivare in futuro
-            senza perdere storico. */}
+        {/* Canale "trade veloce" (5m) RIMOSSO il 03/09: prompt, motore,
+            rotte e funzioni di accesso non esistono piu'. La tabella
+            signals_5m resta nel database con il suo storico -- pochi
+            segnali, nessuno con esito -- perche' cancellarla sarebbe
+            irreversibile e non guadagnerebbe nulla. */}
 
       </main>
     </>

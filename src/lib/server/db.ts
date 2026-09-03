@@ -448,95 +448,6 @@ export async function getStats() {
   return res.rows[0];
 }
 
-export async function insertSignal5m(signal: {
-  direction: string;
-  entry: number | null;
-  stopLoss: number | null;
-  tp1: number | null;
-  tp2: number | null;
-  riskReward: number | null;
-  confidence: number;
-  reasoning: string;
-  marketSnapshot?: unknown;
-}) {
-  const client = getPool();
-  const entry = signal.entry ?? 0;
-  const stopLoss = signal.stopLoss ?? 0;
-  const tp1 = signal.tp1 ?? 0;
-  const tp2 = signal.tp2 ?? 0;
-  const riskReward = signal.riskReward ?? 0;
-  const confidence = signal.confidence ?? 0;
-  const reasoning = signal.reasoning ?? "Risposta AI incompleta: campo mancante.";
-  const res = await client.query(
-    `INSERT INTO signals_5m
-      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
-     RETURNING id, created_at`,
-    [
-      signal.direction,
-      entry,
-      stopLoss,
-      tp1,
-      tp2,
-      riskReward,
-      confidence,
-      reasoning,
-      JSON.stringify(signal.marketSnapshot ?? {}),
-    ]
-  );
-  return res.rows[0];
-}
-
-export async function getSignalHistory5m(limit = 50) {
-  const client = getPool();
-  const res = await client.query(
-    `SELECT * FROM signals_5m WHERE is_demo = false AND direction != 'NO_TRADE' ORDER BY created_at DESC LIMIT $1`,
-    [limit]
-  );
-  return res.rows;
-}
-
-export async function getLatestSignal5m() {
-  const client = getPool();
-  const res = await client.query(
-    `SELECT * FROM signals_5m WHERE is_demo = false ORDER BY created_at DESC LIMIT 1`
-  );
-  return res.rows[0] ?? null;
-}
-
-export async function closeSignal5m(
-  id: string,
-  outcome: "WIN" | "LOSS" | "BREAKEVEN",
-  resultR: number,
-  note?: string
-) {
-  const client = getPool();
-  if (note) {
-    await client.query(
-      `UPDATE signals_5m SET outcome = $2, result_r = $3, closed_at = now(), reasoning = reasoning || $4 WHERE id = $1`,
-      [id, outcome, resultR, note]
-    );
-  } else {
-    await client.query(
-      `UPDATE signals_5m SET outcome = $2, result_r = $3, closed_at = now() WHERE id = $1`,
-      [id, outcome, resultR]
-    );
-  }
-}
-
-export async function getStats5m() {
-  const client = getPool();
-  const res = await client.query(`
-    SELECT
-      COUNT(*) FILTER (WHERE is_demo = false AND direction != 'NO_TRADE') AS total,
-      COUNT(*) FILTER (WHERE is_demo = false AND outcome = 'WIN') AS wins,
-      COUNT(*) FILTER (WHERE is_demo = false AND outcome IN ('WIN','LOSS')) AS decided,
-      AVG(risk_reward) FILTER (WHERE is_demo = false AND direction <> 'NO_TRADE' AND risk_reward > 0) AS avg_rr
-    FROM signals_5m
-  `);
-  return res.rows[0];
-}
-
 export async function getSetting(key: string): Promise<string | null> {
   const client = getPool();
   const res = await client.query(`SELECT value FROM app_settings WHERE key = $1`, [key]);
@@ -577,7 +488,7 @@ export async function setAiPaused(paused: boolean) {
 // di ogni canale. Poche decine di byte invece di centinaia di KB.
 export async function getTickerState() {
   const client = getPool();
-  const [snap, ultimo, ultimo5m] = await Promise.all([
+  const [snap, ultimo] = await Promise.all([
     client.query(
       `SELECT xauusd, xauusd_change_pct, created_at, raw->>'xauusdQuotedAt' AS xauusd_quoted_at
        FROM market_snapshots ORDER BY created_at DESC LIMIT 1`
@@ -594,10 +505,6 @@ export async function getTickerState() {
          AND (direction = 'NO_TRADE' OR attivato_il IS NOT NULL)
        ORDER BY created_at DESC LIMIT 1`
     ),
-    client.query(
-      `SELECT id, direction, entry, confidence FROM signals_5m
-       WHERE is_demo = false ORDER BY created_at DESC LIMIT 1`
-    ),
   ]);
   const s = snap.rows[0] ?? null;
   return {
@@ -609,7 +516,6 @@ export async function getTickerState() {
     snapshotCreatoIl: s?.created_at ?? null,
     quotatoIl: s?.xauusd_quoted_at ? Number(s.xauusd_quoted_at) : null,
     ultimoSegnale: ultimo.rows[0] ?? null,
-    ultimoSegnale5m: ultimo5m.rows[0] ?? null,
   };
 }
 

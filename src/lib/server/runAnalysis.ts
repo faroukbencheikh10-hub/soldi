@@ -9,9 +9,6 @@ import {
   attivaSegnale,
   scadeSegnaleInAttesa,
   closeSignal,
-  insertSignal5m,
-  getLatestSignal5m,
-  closeSignal5m,
   isAiPaused,
   getSetting,
   setSetting,
@@ -27,7 +24,6 @@ import { getMarketSnapshot, getCurrentPrice, isMarketOpen, type MarketSnapshot }
 import { metaApiFetchTimeSeries } from "@/lib/server/metaApiData";
 import { getRelevantNews } from "@/lib/server/news";
 import { getEconomicCalendar } from "@/lib/server/calendar";
-import { generateSignal, generateSignal5m, generaScenarioNotizia } from "@/lib/server/agent";
 import { validateSignal } from "@/lib/server/validateSignal";
 import { sendPushToAll } from "@/lib/server/pushSend";
 import { shouldCallAI, hasTechnicalSetup } from "@/lib/server/aiGate";
@@ -153,7 +149,6 @@ interface CandelaGrezza {
 // - lo snapshot di mercato si persiste al massimo ogni 5 minuti
 const INTERVALLO_MINIMO_AI_MS = 60 * 1000;
 const INTERVALLO_SNAPSHOT_MS = 5 * 60 * 1000;
-const SIGNAL_TIMEOUT_MS_5M = 60 * 60 * 1000;
 // Filtro tecnico locale: quanti segnali tecnici servono per giustificare una
 // chiamata a OpenAI sul canale oro.
 const SOGLIA_SETUP_ORO = 1;
@@ -1207,172 +1202,3 @@ export async function runAnalysis(options?: { force?: boolean }) {
   };
 }
 
-export async function runAnalysis5m(options?: { force?: boolean }) {
-  const force = options?.force ?? false;
-
-  if (!isMarketOpen()) {
-    return { skipped: true, reason: "market_closed" };
-  }
-
-  await ensureSchema();
-
-  if (await isAiPaused()) {
-    return { skipped: true, reason: "ai_paused" };
-  }
-
-  const latest = await getLatestSignal5m();
-  const hasOpenTrade =
-    latest && (latest.direction === "BUY" || latest.direction === "SELL") && !latest.outcome;
-
-  let currentPrice: number | null = null;
-  let naturalOutcome: "WIN" | "LOSS" | null = null;
-  let entry = 0;
-  let stopLoss = 0;
-  let tp1 = 0;
-  let risk = 0;
-
-  let expired5m = false;
-
-  if (hasOpenTrade) {
-    currentPrice = await getCurrentPrice();
-
-    if (currentPrice !== null) {
-      entry = Number(latest.entry);
-      stopLoss = Number(latest.stop_loss);
-      tp1 = Number(latest.tp1);
-      risk = Math.abs(entry - stopLoss);
-
-      if (latest.direction === "BUY") {
-        if (currentPrice <= stopLoss) naturalOutcome = "LOSS";
-        else if (currentPrice >= tp1) naturalOutcome = "WIN";
-      } else {
-        if (currentPrice >= stopLoss) naturalOutcome = "LOSS";
-        else if (currentPrice <= tp1) naturalOutcome = "WIN";
-      }
-    }
-
-    if (naturalOutcome) {
-      const resultR =
-        naturalOutcome === "WIN"
-          ? (latest.direction === "BUY" ? currentPrice! - entry : entry - currentPrice!) / risk
-          : -1;
-      await closeSignal5m(latest.id, naturalOutcome, resultR);
-    } else {
-      const ageMs = Date.now() - new Date(latest.created_at).getTime();
-      expired5m = ageMs > SIGNAL_TIMEOUT_MS_5M;
-
-      if (expired5m) {
-        await closeSignal5m(
-          latest.id,
-          "BREAKEVEN",
-          0,
-          "\n\n[Scaduto: nessun SL/TP toccato entro 1 ora, chiuso automaticamente per sbloccare nuovi segnali.]"
-        );
-      } else if (!force) {
-        try {
-          const freshSnapshot = await getMarketSnapshot();
-          await insertMarketSnapshot(freshSnapshot);
-        } catch (err) {
-          console.error("[runAnalysis5m] snapshot di aggiornamento (trade aperto) fallito:", err);
-        }
-
-        return {
-          skipped: true,
-          reason: "signal_active",
-          activeSignalId: latest.id,
-          direction: latest.direction,
-          entry: currentPrice !== null ? entry : Number(latest.entry),
-          currentPrice: currentPrice ?? undefined,
-        };
-      }
-    }
-  }
-
-  const marketSnapshot = await getMarketSnapshot();
-
-  if (hasOpenTrade && !naturalOutcome && !expired5m && force) {
-    const note =
-      currentPrice === null
-        ? "\n\n[Chiuso manualmente: nuova generazione richiesta dall'utente, prezzo attuale non verificabile.]"
-        : "\n\n[Chiuso manualmente: sostituito da una nuova generazione richiesta dall'utente.]";
-    await closeSignal5m(latest!.id, "BREAKEVEN", 0, note);
-  }
-
-  await insertMarketSnapshot(marketSnapshot);
-
-  const [news, calendar] = await Promise.all([
-    getRelevantNews().catch(() => []),
-    getEconomicCalendar().catch(() => []),
-  ]);
-  await insertContextSnapshot(news, calendar);
-
-  const gate = shouldCallAI(marketSnapshot.session.sessione === "asia", calendar, news);
-  if (!gate.allowed) {
-    const skippedSignal = validateSignal(
-      {
-        direction: "NO_TRADE",
-        entry: null,
-        stopLoss: null,
-        tp1: null,
-        tp2: null,
-        riskReward: null,
-        confidence: 0,
-        reasoning: gate.reason,
-      },
-      "atr5m"
-    );
-    const saved = await insertSignal5m(skippedSignal);
-    return {
-      signalId: saved.id,
-      direction: skippedSignal.direction,
-      confidence: skippedSignal.confidence,
-      xauusd: marketSnapshot.xauusd,
-      atr5m: marketSnapshot.atr5m,
-      dxySource: marketSnapshot.dxySource,
-      us10ySource: marketSnapshot.us10ySource,
-      newsCount: news.length,
-      newsAsia: news.filter((n) => n.area === "asia").length,
-      calendarCount: calendar.length,
-      dataSource: marketSnapshot.source,
-      rejectedReason: gate.reason,
-      aiSkipped: true,
-    };
-  }
-
-  const rawSignal = await generateSignal5m({ marketSnapshot, news, calendar });
-  const signal = validateSignal(rawSignal, "atr5m");
-  const saved = await insertSignal5m(signal);
-
-  if (signal.direction === "BUY" || signal.direction === "SELL") {
-    const ingresso = distanzaIngresso(
-      signal.direction,
-      Number(signal.entry),
-      marketSnapshot.xauusd,
-      marketSnapshot.atr5m ?? null
-    );
-
-    sendPushToAll({
-      title: `Nuovo segnale veloce: ${signal.direction}`,
-      body: `${ingresso.testo} · SL ${Number(signal.stopLoss).toFixed(2)} · Conf ${signal.confidence}%`,
-      url: "/",
-    }).catch((err) => console.error("[runAnalysis5m] invio push fallito:", err));
-  }
-
-
-  return {
-    signalId: saved.id,
-    direction: signal.direction,
-    confidence: signal.confidence,
-    xauusd: marketSnapshot.xauusd,
-    atr5m: marketSnapshot.atr5m,
-    rotturaInAtr: marketSnapshot.levels5m?.rotturaRialzoInAtr ?? null,
-    stopAtrRatio: signal.stopAtrRatio ?? null,
-    dxySource: marketSnapshot.dxySource,
-    us10ySource: marketSnapshot.us10ySource,
-    newsCount: news.length,
-    newsAsia: news.filter((n) => n.area === "asia").length,
-    calendarCount: calendar.length,
-    dataSource: marketSnapshot.source,
-    rejectedReason: signal.rejectedReason ?? null,
-  };
-}
