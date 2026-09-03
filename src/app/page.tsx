@@ -3,6 +3,7 @@ import { ChartPanel } from "@/components/chart-panel";
 import { SignalPanel } from "@/components/signal-panel";
 import { GenerateSignalButton } from "@/components/generate-signal-button";
 import { AiPauseToggle } from "@/components/ai-pause-toggle";
+import { StrategiaToggle } from "@/components/strategia-toggle";
 import { SignalHistory } from "@/components/signal-history";
 import { MacroContext } from "@/components/macro-context";
 import { MarketHoursCompact } from "@/components/market-hours-compact";
@@ -137,6 +138,7 @@ export default async function Home() {
           </div>
 
           <div className="space-y-5">
+            <StrategiaToggle />
             <AiPauseToggle />
             <GenerateSignalButton />
             <SignalPanel signal={currentSignal} />

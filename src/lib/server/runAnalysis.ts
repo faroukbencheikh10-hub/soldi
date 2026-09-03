@@ -1101,6 +1101,10 @@ export async function runAnalysis(options?: { force?: boolean }) {
     memoriaMercato: comprimiContesto(contesto) as unknown as Record<string, unknown>,
     eventiAttivi: eventiPerContesto,
     scenario: await scenarioCorrente(adesso),
+    // Le due percentuali di propensione si chiedono solo quando sei tu a
+    // premere "Genera segnale ora": allungano la risposta e sulle chiamate
+    // automatiche non servono.
+    conProbabilita: force,
   });
   let signal = validateSignal(rawSignal);
 
@@ -1204,6 +1208,13 @@ export async function runAnalysis(options?: { force?: boolean }) {
     calendarCount: calendar.length,
     dataSource: marketSnapshot.source,
     rejectedReason: signal.rejectedReason ?? null,
+    // Propensione per i due lati: presente solo sulla generazione manuale,
+    // perche' solo li' viene chiesta all'AI. Non viene salvata nel database:
+    // serve a te nel momento in cui premi il pulsante, non allo storico.
+    probabilitaBuy:
+      typeof rawSignal?.probabilitaBuy === "number" ? rawSignal.probabilitaBuy : null,
+    probabilitaSell:
+      typeof rawSignal?.probabilitaSell === "number" ? rawSignal.probabilitaSell : null,
   };
 }
 
