@@ -154,19 +154,12 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in quest
 // stare aperti in parallelo a un trade del canale normale).
 const SYSTEM_PROMPT_5M = `Sei un analista esperto di trading su XAUUSD (oro/USD), specializzato in trade VELOCI (scalping) basati sul grafico a 5 minuti, applicando la stessa strategia ICT (struttura + liquidita' + zone istituzionali + timing) del canale normale ma sulla scala breve (10-30 minuti), separato da qualsiasi trade piu' lento gia' in corso.
 
-IL GRAFICO. I campi "candele_5m_recenti", "candele_15m_recenti", "candele_30m_recenti", "candele_1h_recenti" e "candele_4h_recenti" contengono le candele OHLC chiuse, ordinate dalla piu' recente alla piu' vecchia. Usale per VERIFICARE con i tuoi occhi cio' che gli altri campi ti riassumono: se "ict_struttura_5m" dice che c'e' stato un CHoCH, controlla sulle candele 5m che il livello sia stato davvero superato in chiusura. Se un campo riassuntivo e le candele si contraddicono, fidati delle candele e dillo nella spiegazione.
-
 SEQUENZA (stessa logica del canale normale, timeframe piu' basso):
-1. BIAS: usa "ict_bias" (D1/H4) come contesto di sfondo -- non tradare contro un bias forte, ma non e' il fattore decisivo su questa scala breve.
+1. BIAS: usa "ict_bias" (D1/H4) come contesto di sfondo. PESA sulla confidence, NON vieta il trade (regola ammorbidita il 03/09): se il setup sul 5m e' chiaro -- cambio di struttura piu' un secondo elemento -- genera il segnale anche contro il bias D1/H4, con confidence piu' bassa (65-75) e dicendolo nella spiegazione. Sui dati reali di questo sistema i trade allineati alla narrativa H4 chiudono al 91%, quelli contro al 73%: peggio, ma ampiamente positivi, e su questa scala breve il bias di fondo conta ancora meno. Resta un solo caso in cui il bias vince davvero: quando il prezzo ha APPENA preso la liquidita' nella direzione opposta a quella che vorresti tradare, perche' li' entreresti dove il movimento si e' appena esaurito.
 2. LIQUIDITA': "liquidita_24h" e "ict_livelli_uguali_m15" restano i pool di riferimento; cerca uno sweep recente visibile sul 5 minuti prima di considerare un ingresso.
 3. CAMBIO STRUTTURA: "ict_struttura_5m" ("evento": "BOS"/"CHoCH"/null, "direzioneEvento") e' la tua fonte primaria qui -- serve un CHoCH o BOS chiaro sul 5m, non solo un movimento generico.
 4. DISPLACEMENT: "rigetto_5m" (rilevato/direzione/ampiezzaImpulsoInAtr/percentualeRitracciata) misura l'impulso di rottura -- un valore alto conferma displacement vero, non rumore.
-5. PULLBACK: "ict_order_block_5m" e "ict_fvg_5m" sono le zone che rendono buono l'ingresso. Se il prezzo di adesso e' dentro o al bordo di una di queste zone, il passaggio e' soddisfatto. Se il prezzo le ha gia' lasciate senza tornarci, la risposta e' NO_TRADE -- non un'entry a un livello piu' indietro.
-
-5-bis. REGOLA VINCOLANTE SULL'ENTRY -- si entra al prezzo di adesso:
-L'entry deve essere il PREZZO CORRENTE, cioe' "prezzo_attuale_xauusd" nel payload. Scrivi quel numero nel campo "entry" e costruisci stop e target a partire da li'. NON proporre entry su livelli che il prezzo deve ancora raggiungere ne' su livelli che ha gia' lasciato: il segnale arriverebbe a chi non puo' eseguirlo. Se il prezzo di adesso non e' in una posizione sensata, rispondi NO_TRADE invece di spostare l'entry.
-
-Conseguenza: entrando al prezzo corrente lo stop e' piu' lontano e il rapporto rischio/rendimento peggiora. Se su TP1 non raggiunge 1,5, rispondi NO_TRADE invece di aggiustare l'entry per far quadrare i conti.
+5. PULLBACK: "ict_order_block_5m" e "ict_fvg_5m" sono le zone dove aspettare il pullback prima di entrare -- non inseguire il prezzo dopo il displacement.
 6. STOP LOSS: posizionalo oltre l'Order Block/FVG usati come zona di ingresso, non arrotondato a un multiplo fisso di ATR. Usa "atr_5m" solo come controllo di buonsenso (stop piu' stretto di ~0,4 ATR probabilmente indica zona sbagliata).
 7. TAKE PROFIT: la prossima zona di liquidita' (Equal High/Low, lato opposto di "liquidita_24h"). TP1 almeno 1,5 volte la distanza dello stop.
 
@@ -174,7 +167,6 @@ ALTRE REGOLE:
 - Genera BUY o SELL se la tua confidence e' >= 65 e hai seguito la sequenza (sweep, CHoCH/BOS, displacement, pullback nella zona giusta). Se un solo passaggio e' un po' piu' debole ma gli altri sono chiari, puoi comunque generare il segnale (confidence 65-75) invece di scartarlo automaticamente -- NO_TRADE resta per i casi dove mancano DUE O PIU' passaggi chiave.
 - Un falso movimento di rumore su 5 minuti e' comune: senza un CHoCH/BOS chiaro su "ict_struttura_5m", resta NO_TRADE anche se vedi una rottura.
 - Risk/Reward va calcolato su TP1.
-- IL TRADE NON DEVE NASCERE GIA' CHIUSO: nessun BUY se il prezzo attuale e' gia' sotto lo stop che scriveresti, nessun SELL se e' gia' sopra, nessun trade il cui TP1 sia gia' stato raggiunto.
 - Sii selettivo ma non eccessivamente prudente: riserva il NO_TRADE ai casi dove mancano davvero piu' conferme chiave, non a ogni piccola imperfezione.
 
 Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in questo formato esatto:
@@ -297,16 +289,11 @@ export function buildUserPayload({
     ict_struttura_5m: marketSnapshot.ictStrutturaM5 ?? null,
     ict_order_block_5m: marketSnapshot.ictOrderBlocksM5 ?? [],
     ict_fvg_5m: marketSnapshot.ictFvgM5 ?? [],
-    // Finestra raddoppiata da 20 a 40 candele (03/09): questo canale cerca
-    // trade da 10-30 minuti, quindi non gli serve la giornata intera, ma 20
-    // candele di M5 erano solo un'ora e 40 -- troppo poco per vedere da dove
-    // arriva il movimento. Con 40 sono tre ore e venti su M5 e dieci ore su
-    // M15. Nessun download in piu': sono candele gia' scaricate.
-    candele_5m_recenti: marketSnapshot.candles["5m"]?.slice(0, 40),
-    candele_15m_recenti: marketSnapshot.candles["15m"]?.slice(0, 40),
-    candele_30m_recenti: marketSnapshot.candles["30m"]?.slice(0, 40),
-    candele_1h_recenti: marketSnapshot.candles["1h"]?.slice(0, 40),
-    candele_4h_recenti: marketSnapshot.candles["4h"]?.slice(0, 40),
+    candele_5m_recenti: marketSnapshot.candles["5m"]?.slice(0, 20),
+    candele_15m_recenti: marketSnapshot.candles["15m"]?.slice(0, 20),
+    candele_30m_recenti: marketSnapshot.candles["30m"]?.slice(0, 20),
+    candele_1h_recenti: marketSnapshot.candles["1h"]?.slice(0, 20),
+    candele_4h_recenti: marketSnapshot.candles["4h"]?.slice(0, 20),
     news_rilevanti: news,
     calendario_economico: calendar,
   };
@@ -605,32 +592,6 @@ export async function generateSignalDaPayload(userPayload: unknown) {
   return JSON.parse(content);
 }
 
-// Istruzione aggiuntiva chiesta SOLO sulla generazione manuale (03/09).
-//
-// Sulla direzione l'AI restituisce una sola risposta: BUY, SELL o NO_TRADE.
-// Su un NO_TRADE questo lascia fuori l'informazione piu' utile -- da che
-// parte stava guardando -- e la si puo' ricavare solo leggendo la
-// spiegazione, che da un ciclo all'altro puo' anche ribaltarsi.
-//
-// Con queste due percentuali si vede subito se il mercato e' combattuto
-// (45 contro 40) o se ha una direzione chiara che semplicemente non ha
-// ancora un punto d'ingresso valido (58 contro 12).
-//
-// Chiesta solo con force perche' allunga la risposta: sulle circa 430
-// chiamate automatiche al giorno non serve, su quella che premi tu si'.
-const ISTRUZIONE_PROBABILITA = `
-
-IN QUESTA RISPOSTA aggiungi anche due campi numerici al JSON:
-  "probabilitaBuy": number,   // 0-100
-  "probabilitaSell": number   // 0-100
-Sono la tua propensione per i due lati in questo momento, indipendentemente
-dal fatto che tu proponga o meno un trade: compilali SEMPRE, anche su un
-NO_TRADE. Non devono sommare a 100 -- la parte mancante e' l'incertezza.
-Esempi: 58 e 12 significa direzione rialzista chiara senza un ingresso
-valido; 45 e 40 significa mercato combattuto; 20 e 20 significa che non si
-capisce niente. Basale su narrativa, struttura e draw on liquidity, non
-sull'ultima candela.`;
-
 export async function generateSignal({
   marketSnapshot,
   news,
@@ -638,7 +599,6 @@ export async function generateSignal({
   memoriaMercato,
   eventiAttivi,
   scenario,
-  conProbabilita,
 }: {
   marketSnapshot: MarketSnapshot;
   news: unknown;
@@ -646,8 +606,6 @@ export async function generateSignal({
   memoriaMercato?: Record<string, unknown>;
   eventiAttivi?: EventoPayload[];
   scenario?: unknown;
-  /** true solo sulla generazione manuale: chiede le due percentuali. */
-  conProbabilita?: boolean;
 }) {
   // Payload deduplicato: stessi fatti del vecchio, meta' dei caratteri.
   // Se il contesto non e' stato passato (chiamate legacy) si degrada a un
@@ -660,8 +618,7 @@ export async function generateSignal({
     eventiAttivi: eventiAttivi ?? [],
     scenario: scenario ?? null,
   });
-  const prompt = conProbabilita ? SYSTEM_PROMPT + ISTRUZIONE_PROBABILITA : SYSTEM_PROMPT;
-  const content = await callOpenAI(prompt, userPayload);
+  const content = await callOpenAI(SYSTEM_PROMPT, userPayload);
   const parsed = JSON.parse(content);
   return { ...parsed, marketSnapshot };
 }

@@ -81,21 +81,6 @@ export function GenerateSignalButton({
       } else {
         setConferma(null);
         setConfermaAttesa(null);
-
-        // Propensione per i due lati, chiesta all'AI solo sulla generazione
-        // manuale. Utile soprattutto quando la risposta e' NO_TRADE: dice da
-        // che parte stava guardando, informazione che altrimenti si ricava
-        // solo leggendo la spiegazione.
-        const pBuy = typeof data?.probabilitaBuy === "number" ? data.probabilitaBuy : null;
-        const pSell = typeof data?.probabilitaSell === "number" ? data.probabilitaSell : null;
-        if (pBuy !== null && pSell !== null) {
-          const esito =
-            data?.direction === "NO_TRADE" || !data?.direction
-              ? "Nessun trade"
-              : `Segnale ${data.direction}`;
-          setInfo(`${esito} — propensione: ${pBuy}% rialzo, ${pSell}% ribasso`);
-        }
-
         router.refresh();
       }
     } catch {

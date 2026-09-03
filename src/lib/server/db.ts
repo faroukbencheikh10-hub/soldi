@@ -556,30 +556,6 @@ export async function setSetting(key: string, value: string) {
 // La pausa e' manuale e SENZA SCADENZA: resta attiva finche' non viene tolta
 // esplicitamente. Nessun timeout automatico: una pausa che si disattiva da
 // sola fa ripartire le chiamate AI a pagamento senza che nessuno lo sappia.
-// STRATEGIA ATTIVA (03/09): quali canali generano segnali.
-//
-//   "normale" -> solo il canale principale (setup M15, trade fino a 4 ore)
-//   "veloce"  -> solo il canale veloce (trade da 10-30 minuti)
-//
-// UNA O L'ALTRA, MAI INSIEME. Non esiste una modalita' "entrambi": i due
-// canali girerebbero in parallelo raddoppiando le chiamate AI, e
-// soprattutto potresti ritrovarti due segnali contemporanei in direzioni
-// diverse sullo stesso strumento.
-//
-// Il canale veloce era disattivato via codice: la sua rotta cron rispondeva
-// "auto_disabled" senza guardare nulla. Ora la scelta e' un'impostazione, e
-// si cambia dal pulsante in dashboard senza deploy.
-export type StrategiaAttiva = "normale" | "veloce";
-
-export async function getStrategiaAttiva(): Promise<StrategiaAttiva> {
-  const v = await getSetting("strategia_attiva");
-  return v === "veloce" ? "veloce" : "normale";
-}
-
-export async function setStrategiaAttiva(s: StrategiaAttiva) {
-  await setSetting("strategia_attiva", s);
-}
-
 export async function isAiPaused(): Promise<boolean> {
   return (await getSetting("ai_paused")) === "true";
 }
