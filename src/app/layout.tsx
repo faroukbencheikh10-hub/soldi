@@ -6,13 +6,13 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "Soldi Trend — XAUUSD senza ICT",
+  title: "Soldi ORB — XAUUSD Session ORB",
   description:
-    "Copia di Soldi con strategia meccanica: trend H4, pullback Fibonacci, Judas Swing Londra. Nessun ICT, nessuna AI.",
+    "Copia di Soldi con Session ORB: fade del range in Asia, breakout M5 a Londra e New York. Nessun ICT, nessuna AI.",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Soldi Trend",
+    title: "Soldi ORB",
   },
   icons: {
     icon: "/icon-192.png",

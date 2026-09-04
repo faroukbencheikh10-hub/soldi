@@ -12,8 +12,8 @@ export function AppHeader({ quote }: { quote: MarketQuote }) {
             <Gem size={16} />
           </div>
           <div>
-            <div className="text-sm font-semibold text-text leading-none">Soldi Trend</div>
-            <div className="text-[11px] text-muted leading-none mt-0.5">XAUUSD · no ICT · EMA + Fib + Londra</div>
+            <div className="text-sm font-semibold text-text leading-none">Soldi ORB</div>
+            <div className="text-[11px] text-muted leading-none mt-0.5">XAUUSD · Session ORB · fade Asia · break Londra/NY</div>
           </div>
         </div>
 

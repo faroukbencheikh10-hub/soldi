@@ -7,8 +7,6 @@ import { valutaSetupTrend } from "@/lib/server/trendStrategy";
 import { sendPushToAll } from "@/lib/server/pushSend";
 import { chiamaSeAttivo } from "@/lib/server/twilioCall";
 
-const TP1_IN_R = 1.8;
-
 export async function runTrendAnalysis(options?: { force?: boolean }) {
   const force = options?.force ?? false;
 
@@ -84,6 +82,8 @@ export async function runTrendAnalysis(options?: { force?: boolean }) {
     candles: marketSnapshot.candles,
   });
 
+  const confidence = setup.setup === "orb" ? 70 : setup.setup === "fade" ? 58 : 0;
+
   const signal = setup.ok && setup.direzione
     ? validateSignal({
         direction: setup.direzione,
@@ -91,8 +91,8 @@ export async function runTrendAnalysis(options?: { force?: boolean }) {
         stopLoss: setup.stopLoss,
         tp1: setup.tp1,
         tp2: setup.tp2,
-        riskReward: setup.rischioRendimento || TP1_IN_R,
-        confidence: setup.setup === "judas" ? 72 : 64,
+        riskReward: setup.rischioRendimento,
+        confidence,
         reasoning: setup.motivo,
       })
     : validateSignal({
