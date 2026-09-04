@@ -213,8 +213,9 @@ export async function insertSignal(signal: {
   const reasoning = signal.reasoning ?? "Risposta AI incompleta: campo mancante.";
   const res = await client.query(
     `INSERT INTO signals
-      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
+      (direction, entry, stop_loss, tp1, tp2, risk_reward, confidence, reasoning, market_snapshot, is_demo, attivato_il)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,
+             CASE WHEN $1 IN ('BUY','SELL') THEN now() ELSE NULL END)
      RETURNING id, created_at`,
     [
       signal.direction,

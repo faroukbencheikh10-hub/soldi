@@ -4,6 +4,13 @@
 // caso a 0,67 (si rischiava 1 per guadagnare 0,67). Ora il controllo e' vero.
 const MIN_RISK_REWARD = 1.5;
 
+// Tetto massimo. Su 194 trade il rapporto mediano e' 1.53 e il 90esimo
+// percentile 1.86; un solo segnale ha superato 10 (R:R 18.8, stop 7.50 e TP1 a
+// 141 dollari, 26 volte l'ATR15m). Un rapporto altissimo non e' un'occasione:
+// e' uno stop stretto unito a un target di timeframe alto, irraggiungibile
+// nella durata attesa del trade. Avrebbe scartato 2 segnali su 194.
+const MAX_RISK_REWARD = 4;
+
 export interface RawSignal {
   direction: string;
   entry: number | null;
@@ -116,6 +123,19 @@ export function validateSignal(raw: RawSignal, atrField: "atr15m" | "atr5m" = "a
       tp2: 0,
       riskReward: 0,
       rejectedReason: `${normalized} scartato: rapporto rischio/rendimento reale ${riskReward}, sotto il minimo ${MIN_RISK_REWARD} richiesto dalla strategia (TP1 deve distare almeno 1,5 volte lo stop)`,
+    };
+  }
+
+  if (riskReward > MAX_RISK_REWARD) {
+    return {
+      ...raw,
+      direction: "NO_TRADE",
+      entry: 0,
+      stopLoss: 0,
+      tp1: 0,
+      tp2: 0,
+      riskReward: 0,
+      rejectedReason: `${normalized} scartato: rapporto rischio/rendimento reale ${riskReward}, sopra il massimo ${MAX_RISK_REWARD} (target troppo lontano rispetto allo stop)`,
     };
   }
 

@@ -328,6 +328,7 @@ export function buildAiPayload({
   memoriaMercato,
   eventiAttivi,
   scenario,
+  tradeProposto,
 }: {
   marketSnapshot: MarketSnapshot;
   news: unknown;
@@ -335,6 +336,7 @@ export function buildAiPayload({
   memoriaMercato: Record<string, unknown>;
   eventiAttivi: EventoPayload[];
   scenario: unknown;
+  tradeProposto?: unknown;
 }) {
   const prezzo = marketSnapshot.xauusd;
   const ob = (v: unknown) => vicine(v as { top: number; bottom: number }[] | undefined, prezzo);
@@ -436,6 +438,9 @@ export function buildAiPayload({
     },
     news_rilevanti: news,
     calendario_economico: calendar,
+    // Il trade e' gia' costruito dal codice: direzione dalla struttura H1/H4,
+    // livelli dal prezzo live. All'AI resta solo l'ultima parola.
+    trade_proposto: tradeProposto ?? null,
   };
 }
 
@@ -554,6 +559,7 @@ export async function generateSignal({
   memoriaMercato,
   eventiAttivi,
   scenario,
+  tradeProposto,
 }: {
   marketSnapshot: MarketSnapshot;
   news: unknown;
@@ -561,6 +567,7 @@ export async function generateSignal({
   memoriaMercato?: Record<string, unknown>;
   eventiAttivi?: EventoPayload[];
   scenario?: unknown;
+  tradeProposto?: unknown;
 }) {
   // Payload deduplicato: stessi fatti del vecchio, meta' dei caratteri.
   // Se il contesto non e' stato passato (chiamate legacy) si degrada a un
@@ -572,6 +579,7 @@ export async function generateSignal({
     memoriaMercato: memoriaMercato ?? {},
     eventiAttivi: eventiAttivi ?? [],
     scenario: scenario ?? null,
+    tradeProposto: tradeProposto ?? null,
   });
   const content = await callOpenAI(SYSTEM_PROMPT, userPayload);
   const parsed = JSON.parse(content);

@@ -63,6 +63,15 @@ const SIGNAL_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 // un'analisi vecchia.
 const ATTESA_MASSIMA_MS = 90 * 60 * 1000;
 
+// LIVELLI CALCOLATI DAL CODICE (04/09).
+// Basi nei dati (108 segnali dal 24/08): gli stop oltre 1 ATR15m sono la
+// fascia piu' numerosa e piu' redditizia (73 trade, +48.61R); il rapporto
+// mediano storico e' 1.53 e la fascia 1.5-2.0 e' quella con il win rate
+// migliore. Da qui 1.2 ATR di stop e TP1 a 1.8 volte lo stop.
+const STOP_IN_ATR = 1.2;
+const TP1_IN_R = 1.8;
+const TP2_IN_R = 3.0;
+
 // ---------------------------------------------------------------------------
 // DISTANZA DELL'INGRESSO DAL PREZZO
 //
@@ -1313,6 +1322,76 @@ export async function runAnalysis(options?: { force?: boolean }) {
     };
   }
 
+  // DIREZIONE DECISA PRIMA DI CHIAMARE L'AI (04/09).
+  //
+  // La direzione la da' la struttura dei timeframe alti: prima H1, e se e'
+  // laterale si guarda H4. Se sono laterali tutti e due non c'e' verso da
+  // tradare e l'AI non viene nemmeno chiamata -- niente chiamata a pagamento
+  // per un segnale che verrebbe scartato dopo.
+  const biasH1Pre = (marketSnapshot.ictStrutturaH1 as { bias?: string } | undefined)?.bias ?? "laterale";
+  const biasH4Pre = (marketSnapshot.ictStrutturaH4 as { bias?: string } | undefined)?.bias ?? "laterale";
+  const versoDa = (b: string): "BUY" | "SELL" | null =>
+    b === "rialzista" ? "BUY" : b === "ribassista" ? "SELL" : null;
+  const direzioneCodice: "BUY" | "SELL" | null = versoDa(biasH1Pre) ?? versoDa(biasH4Pre);
+
+  // Livelli calcolati subito, sullo stesso prezzo con cui l'AI ragionera'.
+  const atrPre = Number(marketSnapshot.atr15m);
+  const prezzoPre = Number(marketSnapshot.xauusd);
+  const livelliCalcolabili =
+    Number.isFinite(atrPre) && atrPre > 0 && Number.isFinite(prezzoPre) && prezzoPre > 0;
+  const tradeProposto =
+    direzioneCodice && livelliCalcolabili
+      ? (() => {
+          const entry = Number(prezzoPre.toFixed(2));
+          const distanzaStop = atrPre * STOP_IN_ATR;
+          const segno = direzioneCodice === "BUY" ? 1 : -1;
+          return {
+            direzione: direzioneCodice,
+            entry,
+            stop_loss: Number((entry - segno * distanzaStop).toFixed(2)),
+            tp1: Number((entry + segno * distanzaStop * TP1_IN_R).toFixed(2)),
+            tp2: Number((entry + segno * distanzaStop * TP2_IN_R).toFixed(2)),
+            rischio_rendimento: TP1_IN_R,
+            nota:
+              "Direzione e livelli sono gia' decisi dal codice e non vanno cambiati. " +
+              "Rispondi solo se i requisiti del setup reggono questo trade: se si', ripeti " +
+              "questa direzione; altrimenti NO_TRADE.",
+          };
+        })()
+      : null;
+
+  if (!force && (!direzioneCodice || !livelliCalcolabili)) {
+    const motivo = !direzioneCodice
+      ? `Struttura H1 ${biasH1Pre} e H4 ${biasH4Pre}, entrambe laterali: nessuna direzione da tradare, AI non chiamata.`
+      : `ATR15m non disponibile (${String(marketSnapshot.atr15m)}): il codice non puo' dimensionare stop e target, AI non chiamata.`;
+    const skippedSignal = validateSignal({
+      direction: "NO_TRADE",
+      entry: null,
+      stopLoss: null,
+      tp1: null,
+      tp2: null,
+      riskReward: null,
+      confidence: 0,
+      reasoning: motivo,
+    });
+    const saved = await insertSignal(skippedSignal);
+    return {
+      signalId: saved.id,
+      direction: skippedSignal.direction,
+      confidence: skippedSignal.confidence,
+      xauusd: marketSnapshot.xauusd,
+      atr15m: marketSnapshot.atr15m,
+      dxySource: marketSnapshot.dxySource,
+      us10ySource: marketSnapshot.us10ySource,
+      newsCount: news.length,
+      newsAsia: news.filter((n) => n.area === "asia").length,
+      calendarCount: calendar.length,
+      dataSource: marketSnapshot.source,
+      rejectedReason: motivo,
+      aiSkipped: true,
+    };
+  }
+
   // Unica guardia rimasta sulle chiamate a pagamento: mai due analisi AI a
   // meno di un minuto l'una dall'altra, nemmeno se l'impronta cambia.
   const ultimaAi = await getSetting("setup_last_ai_at");
@@ -1333,72 +1412,102 @@ export async function runAnalysis(options?: { force?: boolean }) {
     memoriaMercato: comprimiContesto(contesto) as unknown as Record<string, unknown>,
     eventiAttivi: eventiPerContesto,
     scenario: await scenarioCorrente(adesso),
+    tradeProposto,
   });
   let signal = validateSignal(rawSignal);
 
-  // OGNI SEGNALE GENERATO VIENE INVIATO (02/09).
+  // L'AI APPROVA O RIFIUTA IL TRADE PROPOSTO (04/09).
   //
-  // Per qualche ora i segnali con entry non ancora raggiunta venivano
-  // scartati. Scelta rivista: l'entry di un setup ICT e' il bordo della zona
-  // di pullback, quindi un ordine limite e' il comportamento normale del
-  // metodo, non un difetto. E i dati lo confermavano: i trade con entry oltre
-  // uno stop di distanza avevano fatto 7 vincite su 4 perdite (+11.72R).
-  // Scartarli buttava via trade buoni; il problema vero era la notifica, che
-  // diceva "eseguibile ora" anche quando non lo era -- ed e' li' che si
-  // risolve, nel titolo del push.
+  // Direzione e livelli le ha decisi il codice e l'AI li ha ricevuti nel
+  // payload. La sua risposta vale come si' o no su QUEL trade: se risponde
+  // con la direzione opposta non sta proponendo un altro trade, sta dicendo
+  // che quello mostrato non le torna. In quel caso e' NO_TRADE, mai un
+  // ribaltamento: salvare il verso opposto significherebbe aprire un trade
+  // che l'AI ha rifiutato.
+  if (
+    (signal.direction === "BUY" || signal.direction === "SELL") &&
+    tradeProposto &&
+    signal.direction !== tradeProposto.direzione
+  ) {
+    signal = validateSignal({
+      ...(signal as unknown as Record<string, unknown>),
+      direction: "NO_TRADE",
+      entry: 0,
+      stopLoss: 0,
+      tp1: 0,
+      tp2: 0,
+      riskReward: 0,
+      reasoning: `${signal.reasoning ?? ""}\n\n[Nessun trade: il codice proponeva ${tradeProposto.direzione} (struttura H1 ${biasH1Pre}, H4 ${biasH4Pre}) e l'AI ha risposto ${signal.direction}: non e' un'approvazione.]`,
+    } as never);
+  }
+
+  // SI APPLICA IL TRADE GIA' MOSTRATO ALL'AI (04/09).
   //
-  // RESTA il controllo sui trade nati gia' morti, che veniva da un bug vero:
-  // un segnale il cui stop o target sono GIA' stati superati dal prezzo non
-  // e' un ordine pendente, e' un trade che nascerebbe perso (o gia' vinto
-  // senza essere mai esistito, gonfiando le statistiche). Quelli restano
-  // NO_TRADE.
-  if (signal.direction === "BUY" || signal.direction === "SELL") {
-    const prezzoOra = marketSnapshot.xauusd;
-    const entrySegnale = Number(signal.entry);
-    const stopSegnale = Number(signal.stopLoss);
-    const tp1Segnale = Number(signal.tp1);
-
-    let motivoScarto = "";
-    if (Number.isFinite(prezzoOra) && Number.isFinite(stopSegnale) && Number.isFinite(entrySegnale)) {
-      if (signal.direction === "BUY" ? prezzoOra <= stopSegnale : prezzoOra >= stopSegnale) {
-        motivoScarto = `il prezzo ${Number(prezzoOra).toFixed(2)} ha gia' superato lo stop ${stopSegnale.toFixed(2)}: il trade nascerebbe gia' perso`;
-      } else if (
-        Number.isFinite(tp1Segnale) &&
-        (signal.direction === "BUY" ? prezzoOra >= tp1Segnale : prezzoOra <= tp1Segnale)
-      ) {
-        motivoScarto = `il prezzo ${Number(prezzoOra).toFixed(2)} ha gia' raggiunto il target ${tp1Segnale.toFixed(2)}: non resta niente da prendere`;
-      }
-    }
-
-    if (motivoScarto) {
-      signal = validateSignal({
-        ...rawSignal,
-        direction: "NO_TRADE",
-        entry: 0,
-        stopLoss: 0,
-        tp1: 0,
-        tp2: 0,
-        riskReward: 0,
-        reasoning: `${rawSignal.reasoning ?? ""}\n\n[Scartato: il segnale ${signal.direction} aveva entry ${entrySegnale.toFixed(2)} — ${motivoScarto}.]`,
-      } as typeof rawSignal);
-    }
+  // Direzione e livelli sono stati calcolati PRIMA della chiamata e spediti
+  // nel payload come "trade_proposto": l'AI ha quindi valutato esattamente
+  // questo trade, e la sua e' l'ultima parola. Se ha detto NO_TRADE, sopra e'
+  // gia' diventato NO_TRADE e qui non si entra. Se ha detto di si', si scrive
+  // il trade che ha visto, senza ricalcolare niente e senza usare i suoi
+  // numeri.
+  if ((signal.direction === "BUY" || signal.direction === "SELL") && tradeProposto) {
+    const entryAI = Number(signal.entry);
+    signal = validateSignal({
+      ...(signal as unknown as Record<string, unknown>),
+      direction: tradeProposto.direzione,
+      entry: tradeProposto.entry,
+      stopLoss: tradeProposto.stop_loss,
+      tp1: tradeProposto.tp1,
+      tp2: tradeProposto.tp2,
+      riskReward: TP1_IN_R,
+      reasoning:
+        `${signal.reasoning ?? ""}` +
+        `\n\n[Trade deciso dal codice e approvato dall'AI: ${tradeProposto.direzione} ` +
+        `entry ${tradeProposto.entry.toFixed(2)}, stop ${tradeProposto.stop_loss.toFixed(2)} ` +
+        `(${STOP_IN_ATR} ATR15m), TP1 ${tradeProposto.tp1.toFixed(2)} (${TP1_IN_R}R), ` +
+        `TP2 ${tradeProposto.tp2.toFixed(2)} (${TP2_IN_R}R). ` +
+        `L'AI aveva scritto entry ${Number.isFinite(entryAI) ? entryAI.toFixed(2) : "n/d"}: ignorata.]`,
+    } as never);
+  } else if (signal.direction === "BUY" || signal.direction === "SELL") {
+    signal = validateSignal({
+      ...(signal as unknown as Record<string, unknown>),
+      direction: "NO_TRADE",
+      entry: 0,
+      stopLoss: 0,
+      tp1: 0,
+      tp2: 0,
+      riskReward: 0,
+      reasoning: `${signal.reasoning ?? ""}\n\n[Nessun trade: il codice non ha potuto costruire direzione e livelli (struttura laterale o ATR15m mancante).]`,
+    } as never);
   }
 
   const saved = await insertSignal(signal);
   await setSetting("setup_last_signal_id", saved.id);
 
   if (signal.direction === "BUY" || signal.direction === "SELL") {
-    // NESSUNA NOTIFICA ALLA NASCITA (02/09).
+    // NOTIFICA ALLA NASCITA.
     //
-    // Il segnale nasce IN ATTESA: l'entry e' il bordo della zona di pullback
-    // e il prezzo spesso deve ancora tornarci. Avvisare adesso significava
-    // mandare un trade non eseguibile, con il prezzo che nel frattempo si
-    // muove. La notifica parte ora dal blocco di ATTIVAZIONE, nel ciclo in
-    // cui il prezzo tocca davvero l'entry -- una sola, nel momento giusto.
+    // La regola del trade PENDENTE e' stata rimossa: il segnale non aspetta
+    // piu' che il prezzo torni sull'entry. Nasce gia' attivo (attivato_il
+    // valorizzato da insertSignal) e la notifica parte subito.
+    const prezzoTesto = Number(marketSnapshot.xauusd).toFixed(2);
+    sendPushToAll({
+      title: `${signal.direction} - prezzo ${prezzoTesto}`,
+      body: `Entry ${Number(signal.entry).toFixed(2)} - SL ${Number(signal.stopLoss).toFixed(2)} - TP1 ${Number(
+        signal.tp1
+      ).toFixed(2)} - TP2 ${Number(signal.tp2).toFixed(2)} - Conf ${Number(signal.confidence)}%`,
+      url: "/",
+    }).catch((err) => console.error("[runAnalysis] invio push nascita fallito:", err));
+
+    chiamaSeAttivo(
+      `Nuovo segnale ${signal.direction === "BUY" ? "acquisto" : "vendita"} su oro. ` +
+        `Entrata a ${Number(signal.entry).toFixed(2)}. Stop loss a ${Number(signal.stopLoss).toFixed(2)}. ` +
+        `Primo obiettivo a ${Number(signal.tp1).toFixed(2)}.`
+    ).catch((err) => console.error("[runAnalysis] chiamata nascita fallita:", err));
+
     console.log(
-      `[runAnalysis] segnale ${saved.id} creato in attesa: ${signal.direction} entry ${Number(
+      `[runAnalysis] segnale ${saved.id} creato e attivo: ${signal.direction} entry ${Number(
         signal.entry
-      ).toFixed(2)}, prezzo ${Number(marketSnapshot.xauusd).toFixed(2)}`
+      ).toFixed(2)}, prezzo ${prezzoTesto}`
     );
   }
 
