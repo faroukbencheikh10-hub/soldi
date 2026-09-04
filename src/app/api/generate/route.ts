@@ -1,21 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runAnalysis } from "@/lib/server/runAnalysis";
+import { runTrendAnalysis as runAnalysis } from "@/lib/server/runTrendAnalysis";
 import { getLatestSignal, getLatestMarketSnapshot } from "@/lib/server/db";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// PROTEZIONE DEI TRADE APERTI
-//
-// runAnalysis({ force: true }) chiude il trade in corso come BREAKEVEN per
-// fare posto al nuovo segnale. Sui dati reali e' successo 20 volte in sette
-// giorni, con una vita media di 35 minuti e un risultato medio di +0,22R:
-// quasi meta' delle operazioni non ha ne' vinto ne' perso, e' stata
-// interrotta a meta' volo, spesso mentre era in profitto.
-//
-// La generazione manuale resta possibile, ma su un trade aperto ora serve una
-// conferma esplicita: { confermaChiusura: true } nel corpo della richiesta.
-// Il primo click non chiude niente e restituisce cosa si sta per buttare via.
 export async function POST(req: NextRequest) {
   try {
     let confermaChiusura = false;
@@ -23,7 +12,7 @@ export async function POST(req: NextRequest) {
       const body = await req.json();
       confermaChiusura = Boolean(body?.confermaChiusura);
     } catch {
-      // corpo assente o non JSON: nessuna conferma, si resta nel caso protetto
+      // corpo assente
     }
 
     if (!confermaChiusura) {
@@ -37,11 +26,6 @@ export async function POST(req: NextRequest) {
         const entry = Number(aperto.entry);
         const stopLoss = Number(aperto.stop_loss);
 
-        // Un segnale ANCORA IN ATTESA (attivato_il nullo) non e' un trade:
-        // il prezzo non ha mai toccato l'entry, quindi non c'e' nessun
-        // risultato in corso da mostrare ne' da "buttare via". Chiedere
-        // conferma con un finto R e minuti-di-vita sarebbe fuorviante -- qui
-        // basta avvisare che verra' sostituito, senza numeri inventati.
         if (!aperto.attivato_il) {
           return NextResponse.json({
             ok: true,
@@ -53,8 +37,6 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        // Prezzo dall'ultimo snapshot gia' salvato: nessuna chiamata di rete
-        // per una richiesta che potrebbe non concludersi in una generazione.
         const snapshot = await getLatestMarketSnapshot();
         const prezzo =
           snapshot?.xauusd !== null && snapshot?.xauusd !== undefined
@@ -68,8 +50,6 @@ export async function POST(req: NextRequest) {
                 ((aperto.direction === "BUY" ? prezzo - entry : entry - prezzo) / rischio).toFixed(2)
               )
             : null;
-        // I minuti di vita si contano dall'ATTIVAZIONE: e' da li' che il
-        // trade esiste davvero, non dalla creazione del segnale in attesa.
         const minutiAperto = Math.round(
           (Date.now() - new Date(aperto.attivato_il).getTime()) / 60000
         );

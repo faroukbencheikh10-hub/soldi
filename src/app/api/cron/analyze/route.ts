@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runAnalysis } from "@/lib/server/runAnalysis";
+import { runTrendAnalysis as runAnalysis } from "@/lib/server/runTrendAnalysis";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
