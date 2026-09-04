@@ -1,6 +1,8 @@
-// Valutazione setup ICT originale (Huddleston).
-// CHoCH/BOS M15 + displacement + zona valida -> segnale SUBITO.
-// Entry = prezzo corrente: si entra a mercato appena nasce, niente attesa.
+// Valutazione setup ICT originale di Michael J. Huddleston (Inner Circle Trader).
+// Sequenza: kill zone -> Judas -> CHoCH/BOS M15 -> displacement ->
+// pullback in Order Block / FVG (meglio in OTE 62-79%) -> si entra.
+// Il segnale nasce SOLO quando il prezzo e' gia' in zona: in quel momento
+// si entra a mercato. Non si insegue l'impulso fuori zona.
 export type DirezioneTrade = "BUY" | "SELL";
 
 export interface SetupIctOriginale {
@@ -20,6 +22,11 @@ const TP2_IN_R = 3.0;
 const TOLL_ZONA_ATR = 0.15;
 
 type Zona = { direzione: string; top: number; bottom: number; tipo: string };
+
+function dentroZona(prezzo: number, z: Zona, atr: number): boolean {
+  const t = Math.max(0, atr) * TOLL_ZONA_ATR;
+  return prezzo <= z.top + t && prezzo >= z.bottom - t;
+}
 
 export function valutaSetupIctOriginale(input: {
   prezzo: number;
@@ -81,7 +88,7 @@ export function valutaSetupIctOriginale(input: {
   const atrDisp = Number(disp?.ampiezzaImpulsoInAtr);
   const hasDisp = Boolean(disp?.rilevato) && Number.isFinite(atrDisp) && atrDisp >= 1;
   if (!hasDisp) {
-    return no("Manca il displacement M15 (impulso >= 1 ATR dopo CHoCH/BOS).");
+    return no("Manca il displacement M15 (impulso >= 1 ATR dopo CHoCH/BOS). Senza displacement non c'e' FVG/OB valido.");
   }
 
   const judas = input.judas;
@@ -98,7 +105,7 @@ export function valutaSetupIctOriginale(input: {
   ].filter((z) => z.direzione === dirZona && Number.isFinite(z.top) && Number.isFinite(z.bottom) && z.top > z.bottom);
 
   if (zone.length === 0) {
-    return no(`Nessuna zona M15 ${dirZona} (Order Block / FVG) per lo stop.`);
+    return no(`Nessuna zona M15 ${dirZona} (Order Block / FVG). In ICT l'entry e' solo sul PD array.`);
   }
 
   const ote = input.oteM15;
@@ -106,29 +113,18 @@ export function valutaSetupIctOriginale(input: {
   const oteHi = Number(ote?.fine);
   const oteBasso = Number.isFinite(oteLo) && Number.isFinite(oteHi) ? Math.min(oteLo, oteHi) : null;
   const oteAlto = Number.isFinite(oteLo) && Number.isFinite(oteHi) ? Math.max(oteLo, oteHi) : null;
-  const toll = atr * TOLL_ZONA_ATR;
 
-  const candidate = zone.filter((z) => {
-    if (direzione === "BUY") return prezzo >= z.bottom - toll;
-    return prezzo <= z.top + toll;
-  });
-  if (candidate.length === 0) {
-    return no(
-      direzione === "BUY"
-        ? "Zona M15 gia' rotta al ribasso: setup invalidato."
-        : "Zona M15 gia' rotta al rialzo: setup invalidato."
-    );
+  const occupate = zone.filter((z) => dentroZona(prezzo, z, atr));
+  if (occupate.length === 0) {
+    return no("Prezzo fuori dalla zona di pullback M15. ICT non insegue il displacement: si aspetta il ritorno in OB/FVG.");
   }
 
-  candidate.sort((a, b) => {
+  occupate.sort((a, b) => {
     const aOte = oteBasso !== null && a.bottom <= oteAlto! && a.top >= oteBasso ? 1 : 0;
     const bOte = oteBasso !== null && b.bottom <= oteAlto! && b.top >= oteBasso ? 1 : 0;
-    if (bOte !== aOte) return bOte - aOte;
-    const stopA = direzione === "BUY" ? a.bottom : a.top;
-    const stopB = direzione === "BUY" ? b.bottom : b.top;
-    return Math.abs(prezzo - stopA) - Math.abs(prezzo - stopB);
+    return bOte - aOte;
   });
-  const zona = candidate[0];
+  const zona = occupate[0];
 
   const segno = direzione === "BUY" ? 1 : -1;
   const entry = Number(prezzo.toFixed(2));
@@ -153,6 +149,6 @@ export function valutaSetupIctOriginale(input: {
     tp2,
     rischioRendimento: TP1_IN_R,
     zona: `${zona.tipo} ${dirZona} ${zona.bottom.toFixed(2)}-${zona.top.toFixed(2)}${oteNota}`,
-    motivo: `ICT originale: ${evento} M15 ${dirZona}, displacement. Entrata a mercato subito a ${entry.toFixed(2)}. Zona ${zona.tipo}, kill zone ${kz}.`,
+    motivo: `ICT originale Huddleston: ${evento} M15 ${dirZona}, displacement, pullback su ${zona.tipo}${oteNota}, kill zone ${kz}. Entrata a mercato sul ritorno in zona a ${entry.toFixed(2)}.`,
   };
 }
