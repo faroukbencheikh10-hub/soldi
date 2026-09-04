@@ -2,7 +2,6 @@ import { AppHeader } from "@/components/app-header";
 import { ChartPanel } from "@/components/chart-panel";
 import { SignalPanel } from "@/components/signal-panel";
 import { GenerateSignalButton } from "@/components/generate-signal-button";
-import { TestPushButton } from "@/components/test-push-button";
 import { AiPauseToggle } from "@/components/ai-pause-toggle";
 import { ChiamateToggle } from "@/components/chiamate-toggle";
 import { SignalHistory } from "@/components/signal-history";
@@ -126,7 +125,6 @@ export default async function Home() {
             <AiPauseToggle />
             <ChiamateToggle />
             <GenerateSignalButton label="Genera segnale ORB" />
-            <TestPushButton variant="block" />
             <SignalPanel signal={currentSignal} />
             <MacroContext dxy={dxyQuote} us10y={us10yQuote} />
             <MarketHoursCompact mercati={marketCalendar} />
