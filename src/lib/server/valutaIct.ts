@@ -1,5 +1,6 @@
 // Valutazione setup ICT originale (Huddleston).
-// CHoCH/BOS M15 + displacement + pullback in zona + kill zone + Judas.
+// CHoCH/BOS M15 + displacement -> si PREVEDE il pullback sulla zona.
+// L'entry e' il bordo dell'OB/FVG, non il prezzo gia' corso.
 export type DirezioneTrade = "BUY" | "SELL";
 
 export interface SetupIctOriginale {
@@ -17,6 +18,7 @@ export interface SetupIctOriginale {
 const TP1_IN_R = 1.8;
 const TP2_IN_R = 3.0;
 const TOLL_ZONA_ATR = 0.15;
+const MAX_ATTESA_ATR = 2.5;
 
 type Zona = { direzione: string; top: number; bottom: number; tipo: string };
 
@@ -110,27 +112,45 @@ export function valutaSetupIctOriginale(input: {
   const oteHi = Number(ote?.fine);
   const oteBasso = Number.isFinite(oteLo) && Number.isFinite(oteHi) ? Math.min(oteLo, oteHi) : null;
   const oteAlto = Number.isFinite(oteLo) && Number.isFinite(oteHi) ? Math.max(oteLo, oteHi) : null;
+  const toll = atr * TOLL_ZONA_ATR;
 
-  const occupate = zone.filter((z) => dentroZona(prezzo, z, atr));
-  if (occupate.length === 0) {
-    return no("Prezzo fuori dalla zona di pullback M15. In ICT non si insegue il displacement.");
+  const candidate = zone.filter((z) => {
+    if (direzione === "BUY") return prezzo >= z.bottom - toll;
+    return prezzo <= z.top + toll;
+  });
+  if (candidate.length === 0) {
+    return no(
+      direzione === "BUY"
+        ? "Zona M15 gia' rotta al ribasso: il pullback previsto e' invalidato."
+        : "Zona M15 gia' rotta al rialzo: il pullback previsto e' invalidato."
+    );
   }
 
-  occupate.sort((a, b) => {
-    const aOte =
-      oteBasso !== null && a.bottom <= oteAlto! && a.top >= oteBasso ? 1 : 0;
-    const bOte =
-      oteBasso !== null && b.bottom <= oteAlto! && b.top >= oteBasso ? 1 : 0;
-    return bOte - aOte;
+  candidate.sort((a, b) => {
+    const aOte = oteBasso !== null && a.bottom <= oteAlto! && a.top >= oteBasso ? 1 : 0;
+    const bOte = oteBasso !== null && b.bottom <= oteAlto! && b.top >= oteBasso ? 1 : 0;
+    if (bOte !== aOte) return bOte - aOte;
+    const entryA = direzione === "BUY" ? a.top : a.bottom;
+    const entryB = direzione === "BUY" ? b.top : b.bottom;
+    return Math.abs(prezzo - entryA) - Math.abs(prezzo - entryB);
   });
-  const zona = occupate[0];
+  const zona = candidate[0];
 
   const segno = direzione === "BUY" ? 1 : -1;
-  const entry = Number(prezzo.toFixed(2));
+  const bordo = direzione === "BUY" ? zona.top : zona.bottom;
+  const inZona = dentroZona(prezzo, zona, atr);
+  const entry = Number((inZona ? prezzo : bordo).toFixed(2));
+
+  const distEntry = Math.abs(prezzo - entry);
+  if (!inZona && distEntry > atr * MAX_ATTESA_ATR) {
+    return no(
+      `Displacement gia' troppo lontano dalla zona (${(distEntry / atr).toFixed(1)} ATR). Pullback non piu' prevedibile.`
+    );
+  }
+
   const stopZona = direzione === "BUY" ? zona.bottom : zona.top;
   let stopLoss = Number(stopZona.toFixed(2));
-  const dist = Math.abs(entry - stopLoss);
-  if (dist < atr * 0.4) {
+  if (Math.abs(entry - stopLoss) < atr * 0.4) {
     stopLoss = Number((entry - segno * atr * 0.4).toFixed(2));
   }
   const rischio = Math.abs(entry - stopLoss);
@@ -138,7 +158,11 @@ export function valutaSetupIctOriginale(input: {
   const tp1 = Number((entry + segno * rischio * TP1_IN_R).toFixed(2));
   const tp2 = Number((entry + segno * rischio * TP2_IN_R).toFixed(2));
 
-  const oteNota = ote?.prezzoDentro ? " in fascia OTE" : "";
+  const oteNota = oteBasso !== null && zona.bottom <= oteAlto! && zona.top >= oteBasso ? " in fascia OTE" : "";
+  const fase = inZona
+    ? "prezzo gia' in zona, eseguibile"
+    : `ordine limite previsto a ${entry.toFixed(2)}, prezzo ora ${prezzo.toFixed(2)}`;
+
   return {
     ok: true,
     direzione,
@@ -148,6 +172,6 @@ export function valutaSetupIctOriginale(input: {
     tp2,
     rischioRendimento: TP1_IN_R,
     zona: `${zona.tipo} ${dirZona} ${zona.bottom.toFixed(2)}-${zona.top.toFixed(2)}${oteNota}`,
-    motivo: `ICT originale: ${evento} M15 ${dirZona}, displacement, pullback su ${zona.tipo}, kill zone ${kz}.`,
+    motivo: `ICT originale: ${evento} M15 ${dirZona}, displacement. ${fase}. Zona ${zona.tipo}, kill zone ${kz}.`,
   };
 }
