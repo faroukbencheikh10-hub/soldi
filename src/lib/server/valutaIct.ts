@@ -1,6 +1,6 @@
-// Valutazione setup ICT senza pullback.
+// Valutazione setup ICT senza pullback e senza veto H4.
 // Sequenza: Judas -> CHoCH/BOS M15 -> displacement -> si entra subito a mercato.
-// La zona OB/FVG serve solo per lo stop, non per aspettare il ritorno del prezzo.
+// H4 e' calcolato a monte e passato all'AI come contesto: qui non blocca nulla.
 export type DirezioneTrade = "BUY" | "SELL";
 
 export interface SetupIctOriginale {
@@ -66,11 +66,8 @@ export function valutaSetupIctOriginale(input: {
   const verso = (b?: string | null): DirezioneTrade | null =>
     b === "rialzista" ? "BUY" : b === "ribassista" ? "SELL" : null;
   const h1 = verso(input.biasH1 ?? null);
-  const h4 = verso(input.biasH4 ?? null);
-  const narrativa = h1 ?? h4;
-  const fonte = h1 ? "H1" : h4 ? "H4" : null;
-  if (narrativa && direzione !== narrativa) {
-    return no(`Setup M15 ${direzione} contro narrativa ${fonte} ${narrativa}: in ICT non si trada contro H1/H4.`);
+  if (h1 && direzione !== h1) {
+    return no(`Setup M15 ${direzione} contro narrativa H1 ${h1}: in ICT non si trada contro H1.`);
   }
 
   const disp = input.displacement15m;
@@ -129,6 +126,6 @@ export function valutaSetupIctOriginale(input: {
     tp2,
     rischioRendimento: TP1_IN_R,
     zona: zonaTesto,
-    motivo: `ICT: ${evento} M15 ${dirZona}, displacement. Niente pullback: entrata a mercato subito a ${entry.toFixed(2)}. Stop su ${zonaTesto}.`,
+    motivo: `ICT: ${evento} M15 ${dirZona}, displacement. Entrata a mercato a ${entry.toFixed(2)}. Stop su ${zonaTesto}. H4 solo contesto.`,
   };
 }
