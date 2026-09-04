@@ -18,8 +18,8 @@ function Row({ quote }: { quote: MarketQuote }) {
 
 export function MacroContext({ dxy, us10y }: { dxy: MarketQuote; us10y: MarketQuote }) {
   return (
-    <div className="desk-card p-5">
-      <span className="desk-kicker">Contesto macro</span>
+    <div className="rounded-xl border border-border bg-panel p-5">
+      <span className="text-xs font-medium uppercase tracking-wide text-muted">Contesto macro</span>
       <div className="mt-2 divide-y divide-border">
         <Row quote={dxy} />
         <Row quote={us10y} />

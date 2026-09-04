@@ -38,15 +38,17 @@ export function SignalHistory({
   }, [signals, filter]);
 
   return (
-    <div className="desk-card p-4 sm:p-5">
+    <div className="rounded-xl border border-border bg-panel p-4 sm:p-5">
       <div className="flex items-center justify-between mb-4">
-        <span className="desk-kicker">Storico segnali</span>
-        <div className="desk-seg">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted">Storico segnali</span>
+        <div className="flex gap-1 rounded-lg bg-panel2 p-1">
           {DIRECTION_FILTERS.map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`desk-seg-btn ${filter === f ? "desk-seg-on" : "desk-seg-off"}`}
+              className={`px-2.5 py-1 text-[11px] rounded-md font-medium transition-colors ${
+                filter === f ? "bg-gold text-black" : "text-muted hover:text-text"
+              }`}
             >
               {f}
             </button>

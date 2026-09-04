@@ -19,7 +19,7 @@ export function ContextFeed({ events, news }: { events: EconomicEvent[]; news: N
   const attive = tab === "asia" ? asia : globali;
 
   return (
-    <div className="desk-card p-5">
+    <div className="rounded-xl border border-border bg-panel p-5">
       <div className="flex gap-1 rounded-lg bg-panel2 p-1 mb-4">
         <TabButton active={tab === "globali"} onClick={() => setTab("globali")}>
           <Newspaper size={13} /> Globali
@@ -87,7 +87,7 @@ function TabButton({
     <button
       onClick={onClick}
       className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs rounded-md font-medium transition-colors ${
-        active ? "desk-seg-on" : "desk-seg-off"
+        active ? "bg-gold text-black" : "text-muted hover:text-text"
       }`}
     >
       {children}

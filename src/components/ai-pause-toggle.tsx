@@ -85,8 +85,10 @@ export function AiPauseToggle() {
       <button
         onClick={toggle}
         disabled={busy}
-        className={`desk-btn ${
-          paused ? "desk-btn-sell" : "desk-btn-ghost"
+        className={`w-full inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold py-2.5 transition-colors disabled:opacity-60 disabled:cursor-not-allowed border ${
+          paused
+            ? "bg-sell/15 text-sell border-sell/30 hover:bg-sell/25"
+            : "bg-panel2 text-muted border-border hover:text-text"
         }`}
       >
         {busy ? (
