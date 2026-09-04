@@ -6,12 +6,11 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "Soldi ORB — XAUUSD Session ORB",
-  description:
-    "Copia di Soldi con Session ORB: fade del range in Asia, breakout M5 a Londra e New York. Nessun ICT, nessuna AI.",
+  title: "Soldi ORB — XAUUSD",
+  description: "ORB M5 su XAUUSD. Nessun ICT, nessuna AI.",
   appleWebApp: {
     capable: true,
-    statusBarStyle: "black-translucent",
+    statusBarStyle: "default",
     title: "Soldi ORB",
   },
   icons: {
@@ -22,11 +21,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="it" className={`${inter.variable} ${mono.variable} dark`}>
+    <html lang="it" className={`${inter.variable} ${mono.variable}`}>
       <head>
         <link rel="manifest" href="/manifest.json" />
       </head>
-      <body className="min-h-screen font-sans antialiased">{children}</body>
+      <body className="min-h-screen bg-base text-text font-sans antialiased">{children}</body>
     </html>
   );
 }
