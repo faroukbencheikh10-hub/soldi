@@ -582,6 +582,18 @@ async function avvisaGestione(
   return true;
 }
 
+async function insertNoTradeSeCambia(skippedSignal: Parameters<typeof insertSignal>[0]) {
+  const ultimo = await getLatestSignal();
+  if (
+    ultimo &&
+    ultimo.direction === "NO_TRADE" &&
+    String(ultimo.reasoning ?? "") === String(skippedSignal.reasoning ?? "")
+  ) {
+    return ultimo;
+  }
+  return insertSignal(skippedSignal);
+}
+
 export async function runAnalysis(options?: { force?: boolean }) {
   const force = options?.force ?? false;
 
@@ -1232,7 +1244,7 @@ export async function runAnalysis(options?: { force?: boolean }) {
       confidence: 0,
       reasoning: gate.reason,
     });
-    const saved = await insertSignal(skippedSignal);
+    const saved = await insertNoTradeSeCambia(skippedSignal);
     return {
       signalId: saved.id,
       direction: skippedSignal.direction,
@@ -1304,7 +1316,7 @@ export async function runAnalysis(options?: { force?: boolean }) {
       confidence: 0,
       reasoning: setupTecnico.reason,
     });
-    const saved = await insertSignal(skippedSignal);
+    const saved = await insertNoTradeSeCambia(skippedSignal);
     return {
       signalId: saved.id,
       direction: skippedSignal.direction,
@@ -1400,7 +1412,7 @@ export async function runAnalysis(options?: { force?: boolean }) {
       confidence: 0,
       reasoning: motivo,
     });
-    const saved = await insertSignal(skippedSignal);
+    const saved = await insertNoTradeSeCambia(skippedSignal);
     return {
       signalId: saved.id,
       direction: skippedSignal.direction,

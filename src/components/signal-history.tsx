@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { TradeSignal } from "@/lib/types";
 import { formatRecency } from "@/lib/formatTime";
 
-const DIRECTION_FILTERS = ["Tutti", "BUY", "SELL"] as const;
+const DIRECTION_FILTERS = ["Trade", "BUY", "SELL", "NO TRADE"] as const;
 
 function outcomeColor(outcome?: TradeSignal["outcome"]) {
   if (outcome === "WIN") return "text-buy";
@@ -29,12 +29,13 @@ export function SignalHistory({
   signals: TradeSignal[];
   compact?: boolean;
 }) {
-  const [filter, setFilter] = useState<(typeof DIRECTION_FILTERS)[number]>("Tutti");
+  const [filter, setFilter] = useState<(typeof DIRECTION_FILTERS)[number]>("Trade");
 
-  const filtered = useMemo(
-    () => (filter === "Tutti" ? signals : signals.filter((s) => s.direction === filter)),
-    [signals, filter]
-  );
+  const filtered = useMemo(() => {
+    if (filter === "Trade") return signals.filter((s) => s.direction === "BUY" || s.direction === "SELL");
+    if (filter === "NO TRADE") return signals.filter((s) => s.direction === "NO_TRADE");
+    return signals.filter((s) => s.direction === filter);
+  }, [signals, filter]);
 
   return (
     <div className="rounded-xl border border-border bg-panel p-4 sm:p-5">
