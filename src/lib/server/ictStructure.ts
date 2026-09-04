@@ -65,26 +65,32 @@ export function computeStructure(candles: RawCandle[]): StructureResult {
   const prezzoAttuale = Number(candles[0]?.close);
   if (!Number.isFinite(prezzoAttuale)) return { ...vuoto, bias };
 
+  // ICT: l'evento resta valido mentre il prezzo torna in zona.
+  // Se si guarda solo la chiusura corrente, il CHoCH sparisce proprio sul pullback.
+  const recenti = candles.slice(0, 8).map(toNum);
+  const estremoAlto = Math.max(...recenti.map((c) => c.high).filter(Number.isFinite), prezzoAttuale);
+  const estremoBasso = Math.min(...recenti.map((c) => c.low).filter(Number.isFinite), prezzoAttuale);
+
   let evento: StructureResult["evento"] = null;
   let direzioneEvento: StructureResult["direzioneEvento"] = null;
   let livelloRotto: number | null = null;
 
   if (bias === "rialzista") {
-    if (prezzoAttuale > lastHigh.prezzo) {
+    if (estremoAlto > lastHigh.prezzo) {
       evento = "BOS";
       direzioneEvento = "rialzista";
       livelloRotto = lastHigh.prezzo;
-    } else if (prezzoAttuale < lastLow.prezzo) {
+    } else if (estremoBasso < lastLow.prezzo) {
       evento = "CHoCH";
       direzioneEvento = "ribassista";
       livelloRotto = lastLow.prezzo;
     }
   } else if (bias === "ribassista") {
-    if (prezzoAttuale < lastLow.prezzo) {
+    if (estremoBasso < lastLow.prezzo) {
       evento = "BOS";
       direzioneEvento = "ribassista";
       livelloRotto = lastLow.prezzo;
-    } else if (prezzoAttuale > lastHigh.prezzo) {
+    } else if (estremoAlto > lastHigh.prezzo) {
       evento = "CHoCH";
       direzioneEvento = "rialzista";
       livelloRotto = lastHigh.prezzo;
