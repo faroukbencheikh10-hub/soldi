@@ -77,7 +77,7 @@ E' una mappa condizionale preparata prima dell'uscita: tre rami con soglie, non 
 - se il dato E' uscito, il ramo che si e' verificato ti dice quale direzione ha fondamento macro. Un setup ICT allineato a quel ramo merita confidence piu' alta; uno contrario merita prudenza, e se "confidenza_mappa" e' alta va evitato.
 Lo scenario non genera mai da solo un segnale: non sostituisce nessuno dei quattro elementi.
 
-REGOLA DI CONTEGGIO: dei quattro elementi sopra, UNO puo' essere debole ma presente (es. sweep meno netto, o pullback che sfiora la zona senza toccarla in pieno) e il setup resta valido. Se MANCANO DUE O PIU' elementi dei quattro, resta NO_TRADE. Il bias D1, la narrativa H4/H1 e il timing M5 NON fanno parte di questo conteggio: non contarli ne' a favore ne' contro i quattro elementi.
+REGOLA DI CONTEGGIO: il trade nasce con TRE elementi su quattro. Conta quanti dei quattro elementi (sweep, CHoCH/BOS, displacement, pullback nella zona) sono presenti: con 4 presenti o con 3 presenti e UNO del tutto mancante il setup e' valido e va generato. Un elemento debole ma riconoscibile (es. sweep meno netto, o pullback che sfiora la zona senza toccarla in pieno) conta come presente. Solo se MANCANO DUE O PIU' elementi dei quattro, resta NO_TRADE. L'unico elemento che non puo' mai mancare e' il pullback nella zona, perche' senza zona non esiste un entry eseguibile. Il bias D1, la narrativa H4/H1 e il timing M5 NON fanno parte di questo conteggio: non contarli ne' a favore ne' contro i quattro elementi.
 
 BIAS GIORNALIERO (D1) -- il quadro grande sopra la narrativa:
 Nel payload trovi "ict_bias" (rialzista / ribassista / laterale / in disaccordo), calcolato confrontando la struttura del giornaliero con quella del 4h, e "sintesi_d1_h4" con i due bias separati. Nel metodo originale il Daily da' la direzione di fondo, H4/H1 la narrativa operativa, M15 il setup. Come pesarlo:
@@ -91,13 +91,16 @@ Quando il prezzo e' arrivato nella zona di pullback, "ict_struttura_5m", "ict_or
 - Se il 5m e' NEUTRO (nessun evento, "ict_struttura_5m.evento" null, o un semplice rigetto senza CHoCH/BOS) NON blocca il trade: procedi comunque se il percorso a quattro elementi su M15 e' valido.
 - Il 5m PUO' bloccare il trade SOLO se mostra una vera struttura OPPOSTA CONFERMATA: cioe' "ict_struttura_5m.evento" e' "BOS" o "CHoCH" con "direzioneEvento" OPPOSTA alla direzione che vuoi tradare. Un semplice rigetto (wick, ritracciamento, singola candela contraria senza BOS/CHoCH confermato) NON e' motivo di blocco.
 
+ENTRY -- DEVE ESSERE ESEGUIBILE ORA:
+- L'entry e' il bordo della zona di pullback (Order Block o FVG di M15, idealmente dentro la fascia OTE) e il prezzo attuale "xauusd" deve gia' trovarsi su quel livello o oltre dal lato favorevole (sotto l'entry per un BUY, sopra per un SELL), oppure a pochissimi punti da esso. Il codice scarta automaticamente ogni segnale il cui entry non e' raggiungibile a mercato in questo istante: NON proporre ordini pendenti che aspettano un ritorno del prezzo. Se la zona e' stata gia' lasciata, e' NO_TRADE.
+
 STOP LOSS E TAKE PROFIT:
 - Stop Loss: posizionalo appena oltre la zona di pullback usata (oltre il "top" per una zona ribassista/SELL, oltre il "bottom" per una zona rialzista/BUY) o oltre il massimo/minimo che invaliderebbe davvero il setup -- MAI stretto artificialmente solo per migliorare il Risk/Reward sulla carta. Usa "atr_15m" solo come controllo di buonsenso: se lo stop risultasse piu' stretto di circa 0,4 volte l'ATR probabilmente la zona scelta non e' quella giusta.
 - Take Profit: punta alla prossima zona di liquidita' -- un Equal High/Low opposto, il lato opposto di "liquidita_24h", o un massimo/minimo strutturale rilevante. TP1 deve comunque distare almeno 1,5 volte la distanza dello stop. ATTENZIONE: questa regola e' verificata automaticamente dal codice sui numeri che scrivi -- un segnale con TP1 piu' vicino di 1,5 volte lo stop viene scartato e trasformato in NO_TRADE. Non proporre setup sotto questa soglia: o allarghi il target fino a una zona di liquidita' vera, o e' NO_TRADE.
 
 ALTRE REGOLE:
 - Genera BUY o SELL se la tua confidence e' >= 65 e il percorso a quattro elementi su M15 rispetta la REGOLA DI CONTEGGIO, tenendo conto della narrativa H4/H1 e del timing M5 come descritto sopra.
-- La confidence NON deve essere un valore fisso: piu' elementi sono chiari e allineati (e piu' la narrativa H4/H1 concorda), piu' puo' salire (fino a 95+); con un solo elemento debole resta nella fascia 65-75; con due o piu' elementi mancanti scendi sotto 65 e vai NO_TRADE.
+- La confidence NON deve essere un valore fisso: piu' elementi sono chiari e allineati (e piu' la narrativa H4/H1 concorda), piu' puo' salire (fino a 95+); con 4 elementi presenti stai sopra 75; con 3 su 4 (uno mancante) resta nella fascia 65-75 e genera comunque il segnale; con due o piu' elementi mancanti scendi sotto 65 e vai NO_TRADE.
 - Considera il contesto fondamentale (news, calendario economico) come conferma o rischio aggiuntivo, non come sostituto del percorso ICT. Ogni notizia dichiara la sua "area": "asia" per la redazione asiatica, "globale" per quella americana/internazionale.
 - SESSIONE DI MERCATO ("sessione_corrente"): Londra e New York (specialmente "londra_new_york", la sovrapposizione) sono le sessioni con piu' liquidita' e dove il percorso sopra e' piu' affidabile -- e' li' che i grandi player operano davvero. In sessione "asia" la liquidita' istituzionale e' minore e gli sweep sono meno significativi: in quella fascia richiedi un elemento in piu' ben confermato prima di salire sopra 70, ma questo NON significa evitare il segnale a priori -- un setup pulito in Asia resta valido.
 - MARKET CALENDAR CONTEXT ("market_calendar_context"): per London, New York, Tokyo e COMEX Gold dice se il mercato e' OPEN o CLOSED IN QUESTO MOMENTO e indica l'eventuale festivita' di chiusura di oggi. Se la giornata precedente di mercato era una festivita', puo' comparire anche "previous_holiday" con data e nome. Regole:
@@ -111,7 +114,7 @@ ALTRE REGOLE:
 - "finestra_apertura_volatile" (primi 45 minuti da apertura Londra o New York): e' il momento classico dello sweep -- coerente con l'elemento 1, non un'eccezione. Se vedi un movimento improvviso in questa finestra, trattalo come un possibile sweep di liquidita' da confermare con CHoCH e displacement, non come un trend gia' partito.
 - Fuori dalla finestra di apertura ma dentro "londra_new_york", un allineamento fra la direzione del segnale e la direzione di DXY (es. DXY in calo forte insieme a un BUY sull'oro) rafforza ulteriormente la confidence.
 - Risk/Reward va calcolato su TP1.
-- Sii selettivo ma non eccessivamente prudente: un setup con il percorso a quattro elementi rispettato merita il segnale, anche se il bias e' contrario o il 5m e' neutro. Riserva il NO_TRADE ai casi dove mancano davvero due o piu' elementi chiave, non a ogni piccola imperfezione.
+- Sii selettivo ma non eccessivamente prudente: un setup con almeno TRE dei quattro elementi merita il segnale, anche se il bias e' contrario o il 5m e' neutro. Riserva il NO_TRADE ai casi dove mancano davvero due o piu' elementi chiave, non a un singolo elemento assente.
 
 Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, nessun altro testo, in questo formato esatto:
 {
@@ -328,7 +331,6 @@ export function buildAiPayload({
   memoriaMercato,
   eventiAttivi,
   scenario,
-  tradeProposto,
 }: {
   marketSnapshot: MarketSnapshot;
   news: unknown;
@@ -336,7 +338,6 @@ export function buildAiPayload({
   memoriaMercato: Record<string, unknown>;
   eventiAttivi: EventoPayload[];
   scenario: unknown;
-  tradeProposto?: unknown;
 }) {
   const prezzo = marketSnapshot.xauusd;
   const ob = (v: unknown) => vicine(v as { top: number; bottom: number }[] | undefined, prezzo);
@@ -438,9 +439,6 @@ export function buildAiPayload({
     },
     news_rilevanti: news,
     calendario_economico: calendar,
-    // Il trade e' gia' costruito dal codice: direzione dalla struttura H1/H4,
-    // livelli dal prezzo live. All'AI resta solo l'ultima parola.
-    trade_proposto: tradeProposto ?? null,
   };
 }
 
@@ -559,7 +557,6 @@ export async function generateSignal({
   memoriaMercato,
   eventiAttivi,
   scenario,
-  tradeProposto,
 }: {
   marketSnapshot: MarketSnapshot;
   news: unknown;
@@ -567,7 +564,6 @@ export async function generateSignal({
   memoriaMercato?: Record<string, unknown>;
   eventiAttivi?: EventoPayload[];
   scenario?: unknown;
-  tradeProposto?: unknown;
 }) {
   // Payload deduplicato: stessi fatti del vecchio, meta' dei caratteri.
   // Se il contesto non e' stato passato (chiamate legacy) si degrada a un
@@ -579,7 +575,6 @@ export async function generateSignal({
     memoriaMercato: memoriaMercato ?? {},
     eventiAttivi: eventiAttivi ?? [],
     scenario: scenario ?? null,
-    tradeProposto: tradeProposto ?? null,
   });
   const content = await callOpenAI(SYSTEM_PROMPT, userPayload);
   const parsed = JSON.parse(content);
