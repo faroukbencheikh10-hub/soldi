@@ -87,7 +87,7 @@ function TabButton({
     <button
       onClick={onClick}
       className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs rounded-md font-medium transition-colors ${
-        active ? "bg-gold text-black" : "text-muted hover:text-text"
+        active ? "desk-seg-on" : "desk-seg-off"
       }`}
     >
       {children}

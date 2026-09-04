@@ -18,15 +18,13 @@ export function ChartPanel() {
   return (
     <div className="desk-card overflow-hidden flex flex-col h-[560px]">
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">XAUUSD — Grafico live</span>
-        <div className="flex gap-1 rounded-lg bg-panel2 p-1">
+        <span className="desk-kicker">XAUUSD — Grafico live</span>
+        <div className="desk-seg">
           {TIMEFRAMES.map((t) => (
             <button
               key={t.value}
               onClick={() => setTf(t.value)}
-              className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
-                tf === t.value ? "bg-gold text-black" : "text-muted hover:text-text"
-              }`}
+              className={`desk-seg-btn ${tf === t.value ? "desk-seg-on" : "desk-seg-off"}`}
             >
               {t.label}
             </button>

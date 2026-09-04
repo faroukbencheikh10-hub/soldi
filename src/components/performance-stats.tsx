@@ -3,8 +3,8 @@ import { BarChart3 } from "lucide-react";
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border bg-panel2 px-4 py-3">
-      <div className="text-[10px] uppercase tracking-wide text-muted">{label}</div>
+    <div className="desk-metric px-4 py-3">
+      <div className="desk-metric-label">{label}</div>
       <div className="font-mono text-lg text-text mt-1">{value}</div>
     </div>
   );
@@ -15,7 +15,7 @@ export function PerformanceStatsPanel({ stats }: { stats: PerformanceStats }) {
     <div className="desk-card p-5">
       <div className="flex items-center gap-2 mb-4">
         <BarChart3 size={15} className="text-gold" />
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">Statistiche performance</span>
+        <span className="desk-kicker">Statistiche performance</span>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <StatCard label="Segnali totali" value={String(stats.totalSignals)} />

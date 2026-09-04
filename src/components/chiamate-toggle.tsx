@@ -69,10 +69,8 @@ export function ChiamateToggle() {
     <button
       onClick={toggle}
       disabled={busy}
-      className={`w-full inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold py-2.5 transition-colors disabled:opacity-60 disabled:cursor-not-allowed border ${
-        attive
-          ? "bg-buy/15 text-buy border-buy/30 hover:bg-buy/25"
-          : "bg-panel2 text-muted border-border hover:text-text"
+      className={`desk-btn ${
+        attive ? "desk-btn-buy" : "desk-btn-ghost"
       }`}
     >
       {busy ? (

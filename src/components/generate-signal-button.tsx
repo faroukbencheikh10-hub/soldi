@@ -187,7 +187,7 @@ export function GenerateSignalButton({
       <button
         onClick={() => genera(false)}
         disabled={loading}
-        className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gold hover:bg-gold/90 disabled:opacity-60 disabled:cursor-not-allowed text-black text-sm font-semibold py-2.5 transition-colors"
+        className="desk-btn-primary"
       >
         {loading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
         {loading ? "Analisi in corso..." : label}

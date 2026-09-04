@@ -140,9 +140,9 @@ function DirectionBadge({ direction }: { direction: TradeSignal["direction"] }) 
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border bg-panel2 px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-muted">{label}</div>
-      <div className="font-mono text-sm text-text mt-0.5">{value}</div>
+    <div className="desk-metric">
+      <div className="desk-metric-label">{label}</div>
+      <div className="desk-metric-value">{value}</div>
     </div>
   );
 }
@@ -153,7 +153,7 @@ export function SignalPanel({ signal }: { signal: TradeSignal | null }) {
       <div className="desk-card p-5">
         <div className="flex items-center gap-2 mb-3">
           <ShieldAlert size={16} className="text-muted" />
-          <span className="text-xs font-medium uppercase tracking-wide text-muted">Segnale corrente</span>
+          <span className="desk-kicker">Segnale corrente</span>
         </div>
         <div className="rounded-lg border border-dashed border-border bg-panel2 py-8 text-center">
           <p className="text-sm text-text font-medium">Agente non ancora collegato</p>
@@ -168,7 +168,7 @@ export function SignalPanel({ signal }: { signal: TradeSignal | null }) {
   return (
     <div className="desk-card p-5">
       <div className="flex items-center justify-between mb-4">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">Segnale corrente</span>
+        <span className="desk-kicker">Segnale corrente</span>
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] text-muted">{formatRecency(signal.createdAt)}</span>
           {signal.isDemo && (

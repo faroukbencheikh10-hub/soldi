@@ -32,7 +32,7 @@ function Riga({ m }: { m: MarketCalendarStatus }) {
 export function MarketHoursCompact({ mercati }: { mercati: MarketCalendarContext }) {
   return (
     <div className="desk-card p-3">
-      <span className="text-xs font-medium uppercase tracking-wide text-muted">Mercati</span>
+      <span className="desk-kicker">Mercati</span>
       <div className="mt-1 divide-y divide-border">
         {ORDINE.map((id) => (
           <Riga key={id} m={mercati[id]} />
