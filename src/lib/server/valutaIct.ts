@@ -86,7 +86,9 @@ export function valutaSetupIctOriginale(input: {
 
   const disp = input.displacement15m;
   const atrDisp = Number(disp?.ampiezzaImpulsoInAtr);
-  const hasDisp = Boolean(disp?.rilevato) && Number.isFinite(atrDisp) && atrDisp >= 1;
+  // Displacement ICT = impulso >= 1 ATR. Non serve il flag "rilevato" del
+  // modulo rigetto, che chiede anche un ritracciamento del 50%.
+  const hasDisp = Number.isFinite(atrDisp) && atrDisp >= 1;
   if (!hasDisp) {
     return no("Manca il displacement M15 (impulso >= 1 ATR dopo CHoCH/BOS). Senza displacement non c'e' FVG/OB valido.");
   }
