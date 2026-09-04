@@ -9,6 +9,7 @@ import { MacroContext } from "@/components/macro-context";
 import { MarketHoursCompact } from "@/components/market-hours-compact";
 import { ContextFeed } from "@/components/context-feed";
 import { PerformanceStatsPanel } from "@/components/performance-stats";
+import { TradeFolder } from "@/components/trade-folder";
 import { SIGNAL_HISTORY as DEMO_HISTORY } from "@/lib/mock-data";
 import { MarketQuote, TradeSignal, PerformanceStats } from "@/lib/types";
 import {
@@ -17,6 +18,8 @@ import {
   getSignalHistory,
   getStats,
   getLatestSignal,
+  getSegnaleAttivo,
+  getSegnaliInAttesa,
 } from "@/lib/server/db";
 import { SignalWatcher } from "@/components/signal-watcher";
 import { getMarketCalendarContext } from "@/lib/server/marketCalendar";
@@ -48,6 +51,8 @@ export default async function Home() {
   let historyRows: any[] = [];
   let statsRow: any = null;
   let latestSignalRow: any = null;
+  let tradeAttivoRow: any = null;
+  let tradeInAttesaRows: any[] = [];
   let dbError = false;
 
   try {
@@ -57,12 +62,16 @@ export default async function Home() {
       historyRows,
       statsRow,
       latestSignalRow,
+      tradeAttivoRow,
+      tradeInAttesaRows,
     ] = await Promise.all([
       getLatestMarketSnapshot(),
       getLatestContextSnapshot(),
       getSignalHistory(20),
       getStats(),
       getLatestSignal(),
+      getSegnaleAttivo(),
+      getSegnaliInAttesa(),
     ]);
   } catch {
     dbError = true;
@@ -108,7 +117,6 @@ export default async function Home() {
     status: dbError ? "error" : !isStale && marketSnapshot?.us10y !== null && marketSnapshot?.us10y !== undefined ? "live" : "disconnected",
   };
 
-  // Stato dei mercati calcolato server-side, come tutto il resto della pagina.
   const marketCalendar = getMarketCalendarContext();
 
   const news = contextSnapshot?.news ?? [];
@@ -135,6 +143,12 @@ export default async function Home() {
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_360px] items-start">
           <div className="space-y-5">
             <ChartPanel />
+            <TradeFolder
+              trades={[
+                ...(tradeAttivoRow ? [mapSignalRow(tradeAttivoRow)] : []),
+                ...tradeInAttesaRows.map(mapSignalRow),
+              ]}
+            />
             <SignalHistory signals={signalHistory} />
           </div>
 
@@ -149,13 +163,6 @@ export default async function Home() {
             <PerformanceStatsPanel stats={performanceStats} />
           </div>
         </div>
-
-        {/* Canale "trade veloce" (5m): sezione rimossa dalla dashboard su
-            richiesta -- non serve per ora. Backend/dati invariati (tabella
-            signals_5m, route /api/generate-5m, cron gia' disattivato in
-            /api/cron/analyze-5m), cosi' e' facile da riattivare in futuro
-            senza perdere storico. */}
-
       </main>
     </>
   );
