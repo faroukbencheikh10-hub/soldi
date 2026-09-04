@@ -4,7 +4,6 @@ import { TrendingUp, TrendingDown, CircleSlash } from "lucide-react";
 
 function Riga({ signal }: { signal: TradeSignal }) {
   const noTrade = signal.direction === "NO_TRADE";
-  const vivo = !noTrade && Boolean(signal.attivatoIl);
   const buy = signal.direction === "BUY";
 
   return (
@@ -43,9 +42,9 @@ function Riga({ signal }: { signal: TradeSignal }) {
       <p className="text-[11px] text-muted mt-2 leading-snug">
         {noTrade
           ? signal.reasoning
-          : vivo
-            ? "Trade vivo: il prezzo ha validato l'entry. Stop e target sono in monitoraggio."
-            : "Segnale nato, in attesa che il prezzo tocchi l'entry."}
+          : signal.outcome
+            ? `${signal.outcome}${signal.resultR != null ? ` · ${signal.resultR}R` : ""}`
+            : "Segnale nato in zona: entra a mercato ora. Stop e target in monitoraggio."}
       </p>
     </div>
   );
