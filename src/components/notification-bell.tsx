@@ -26,7 +26,6 @@ async function mostraNotificaLocale() {
         body,
         icon: "/icon-192.png",
         tag: "test-notification",
-        renotify: true,
       });
       return true;
     }
@@ -91,7 +90,7 @@ export function NotificationBell() {
     try {
       await fetch("/api/push/test", { method: "POST" });
     } catch {
-      // la locale basta per vedere il banner
+      // ignore
     }
     if (locale) {
       setTestState("sent");
