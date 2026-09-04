@@ -12,28 +12,36 @@ html {
 }
 
 body {
-  background-color: #0a0d12;
+  background-color: #07090d;
   background-image:
-    radial-gradient(circle at 15% 0%, rgba(212, 175, 90, 0.06), transparent 40%),
-    radial-gradient(circle at 85% 100%, rgba(62, 207, 142, 0.04), transparent 40%);
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(212, 175, 90, 0.08), transparent 50%),
+    linear-gradient(180deg, #0b0f16 0%, #07090d 40%, #07090d 100%);
   color: #e6e9ee;
 }
 
 ::selection {
-  background: rgba(212, 175, 90, 0.3);
+  background: rgba(212, 175, 90, 0.28);
+  color: #fff8e8;
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0a0d12;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #232935;
-  border-radius: 6px;
+  background: #2a3140;
+  border-radius: 8px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #2d3542;
+  background: #3a4354;
+}
+
+@layer components {
+  .desk-card {
+    @apply rounded-2xl border border-white/[0.06] bg-panel/90 shadow-[0_10px_40px_rgba(0,0,0,0.35)];
+    backdrop-filter: blur(8px);
+  }
 }

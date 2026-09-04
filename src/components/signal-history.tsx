@@ -38,7 +38,7 @@ export function SignalHistory({
   }, [signals, filter]);
 
   return (
-    <div className="rounded-xl border border-border bg-panel p-4 sm:p-5">
+    <div className="desk-card p-4 sm:p-5">
       <div className="flex items-center justify-between mb-4">
         <span className="text-xs font-medium uppercase tracking-wide text-muted">Storico segnali</span>
         <div className="flex gap-1 rounded-lg bg-panel2 p-1">

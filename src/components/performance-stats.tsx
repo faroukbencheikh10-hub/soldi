@@ -12,7 +12,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
 
 export function PerformanceStatsPanel({ stats }: { stats: PerformanceStats }) {
   return (
-    <div className="rounded-xl border border-border bg-panel p-5">
+    <div className="desk-card p-5">
       <div className="flex items-center gap-2 mb-4">
         <BarChart3 size={15} className="text-gold" />
         <span className="text-xs font-medium uppercase tracking-wide text-muted">Statistiche performance</span>

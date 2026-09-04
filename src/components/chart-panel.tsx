@@ -16,7 +16,7 @@ export function ChartPanel() {
   const src = `https://s.tradingview.com/widgetembed/?frameElementId=tv-chart&symbol=OANDA%3AXAUUSD&interval=${tf}&hidesidetoolbar=1&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=11151c&studies=%5B%5D&theme=dark&style=1&timezone=Etc%2FUTC`;
 
   return (
-    <div className="rounded-xl border border-border bg-panel overflow-hidden flex flex-col h-[520px]">
+    <div className="desk-card overflow-hidden flex flex-col h-[560px]">
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <span className="text-xs font-medium uppercase tracking-wide text-muted">XAUUSD — Grafico live</span>
         <div className="flex gap-1 rounded-lg bg-panel2 p-1">

@@ -150,7 +150,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 export function SignalPanel({ signal }: { signal: TradeSignal | null }) {
   if (!signal) {
     return (
-      <div className="rounded-xl border border-border bg-panel p-5">
+      <div className="desk-card p-5">
         <div className="flex items-center gap-2 mb-3">
           <ShieldAlert size={16} className="text-muted" />
           <span className="text-xs font-medium uppercase tracking-wide text-muted">Segnale corrente</span>
@@ -166,7 +166,7 @@ export function SignalPanel({ signal }: { signal: TradeSignal | null }) {
   }
 
   return (
-    <div className="rounded-xl border border-border bg-panel p-5">
+    <div className="desk-card p-5">
       <div className="flex items-center justify-between mb-4">
         <span className="text-xs font-medium uppercase tracking-wide text-muted">Segnale corrente</span>
         <div className="flex items-center gap-2">
