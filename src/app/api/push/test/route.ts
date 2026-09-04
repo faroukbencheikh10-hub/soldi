@@ -6,8 +6,8 @@ export const dynamic = "force-dynamic";
 export async function POST() {
   try {
     const result = await sendPushToAll({
-      title: "Notifica di prova — Investment Pal",
-      body: "Se vedi questo, le notifiche push funzionano correttamente.",
+      title: "Notifica di prova — Soldi ORB",
+      body: "Se vedi questo, le notifiche push funzionano.",
       url: "/",
       tag: "test-notification",
     });
