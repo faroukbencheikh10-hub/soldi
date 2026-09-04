@@ -1,8 +1,7 @@
-// Valutazione setup ICT originale di Michael J. Huddleston (Inner Circle Trader).
-// Sequenza: kill zone -> Judas -> CHoCH/BOS M15 -> displacement ->
+// Valutazione setup ICT (Huddleston) senza veto orario.
+// Sequenza: Judas -> CHoCH/BOS M15 -> displacement ->
 // pullback in Order Block / FVG (meglio in OTE 62-79%) -> si entra.
-// Il segnale nasce SOLO quando il prezzo e' gia' in zona: in quel momento
-// si entra a mercato. Non si insegue l'impulso fuori zona.
+// Il segnale nasce SOLO quando il prezzo e' gia' in zona.
 export type DirezioneTrade = "BUY" | "SELL";
 
 export interface SetupIctOriginale {
@@ -58,11 +57,6 @@ export function valutaSetupIctOriginale(input: {
   if (!Number.isFinite(prezzo) || prezzo <= 0) return no("Prezzo XAUUSD non disponibile.");
   if (!Number.isFinite(atr) || atr <= 0) return no("ATR15m non disponibile: non si dimensionano stop e target.");
 
-  const kz = input.killZone?.attuale ?? "nessuna";
-  if (kz !== "londra" && kz !== "new-york") {
-    return no(`Fuori kill zone ICT (${kz}). Si opera solo Londra 07-10 UTC o New York 12-15 UTC.`);
-  }
-
   const evento = input.strutturaM15?.evento ?? null;
   const dirEv = input.strutturaM15?.direzioneEvento ?? null;
   if (evento !== "CHoCH" && evento !== "BOS") {
@@ -86,8 +80,6 @@ export function valutaSetupIctOriginale(input: {
 
   const disp = input.displacement15m;
   const atrDisp = Number(disp?.ampiezzaImpulsoInAtr);
-  // Displacement ICT = impulso >= 1 ATR. Non serve il flag "rilevato" del
-  // modulo rigetto, che chiede anche un ritracciamento del 50%.
   const hasDisp = Number.isFinite(atrDisp) && atrDisp >= 1;
   if (!hasDisp) {
     return no("Manca il displacement M15 (impulso >= 1 ATR dopo CHoCH/BOS). Senza displacement non c'e' FVG/OB valido.");
@@ -151,6 +143,6 @@ export function valutaSetupIctOriginale(input: {
     tp2,
     rischioRendimento: TP1_IN_R,
     zona: `${zona.tipo} ${dirZona} ${zona.bottom.toFixed(2)}-${zona.top.toFixed(2)}${oteNota}`,
-    motivo: `ICT originale Huddleston: ${evento} M15 ${dirZona}, displacement, pullback su ${zona.tipo}${oteNota}, kill zone ${kz}. Entrata a mercato sul ritorno in zona a ${entry.toFixed(2)}.`,
+    motivo: `ICT: ${evento} M15 ${dirZona}, displacement, pullback su ${zona.tipo}${oteNota}. Entrata a mercato in zona a ${entry.toFixed(2)}.`,
   };
 }
