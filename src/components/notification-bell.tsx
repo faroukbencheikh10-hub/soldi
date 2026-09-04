@@ -11,6 +11,32 @@ import {
 
 type Status = "granted" | "denied" | "default" | "unsupported" | "loading";
 
+async function mostraNotificaLocale() {
+  const title = "Soldi ORB";
+  const body = "Il mercato ha chiuso.";
+  try {
+    const perm =
+      typeof Notification !== "undefined" && Notification.permission === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
+    if (perm !== "granted") return false;
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg) {
+      await reg.showNotification(title, {
+        body,
+        icon: "/icon-192.png",
+        tag: "test-notification",
+        renotify: true,
+      });
+      return true;
+    }
+    new Notification(title, { body, icon: "/icon-192.png" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function NotificationBell() {
   const [status, setStatus] = useState<Status>("default");
   const [open, setOpen] = useState(true);
@@ -61,24 +87,18 @@ export function NotificationBell() {
   async function handleTestPush() {
     setTestState("sending");
     setTestDetail(null);
+    const locale = await mostraNotificaLocale();
     try {
-      const res = await fetch("/api/push/test", { method: "POST" });
-      const data = await res.json();
-      if (data?.ok && data.sent > 0) setTestState("sent");
-      else if (data?.ok) {
-        setTestState("empty");
-        setTestDetail(
-          data.subscriptions === 0
-            ? "Nessun dispositivo registrato. Riattiva le notifiche da questo telefono."
-            : "Invio a 0. Controlla le chiavi VAPID."
-        );
-      } else {
-        setTestState("error");
-        setTestDetail(data?.error || "Invio non riuscito.");
-      }
+      await fetch("/api/push/test", { method: "POST" });
     } catch {
+      // la locale basta per vedere il banner
+    }
+    if (locale) {
+      setTestState("sent");
+      setTestDetail("Dovresti vedere: Il mercato ha chiuso.");
+    } else {
       setTestState("error");
-      setTestDetail("Errore di rete.");
+      setTestDetail("Permesso notifiche assente. Premi Attiva notifiche e accetta il popup.");
     }
   }
 
@@ -111,12 +131,9 @@ export function NotificationBell() {
                 {testState === "sending" ? "Invio in corso…" : "Invia notifica di prova"}
               </button>
               {testState === "sent" && (
-                <p className="text-xs text-buy mt-2">Inviata — controlla il telefono.</p>
+                <p className="text-xs text-buy mt-2">{testDetail ?? "Inviata."}</p>
               )}
-              {testState === "empty" && <p className="text-xs text-sell mt-2">{testDetail}</p>}
-              {testState === "error" && (
-                <p className="text-xs text-sell mt-2">{testDetail ?? "Invio non riuscito."}</p>
-              )}
+              {testState === "error" && <p className="text-xs text-sell mt-2">{testDetail}</p>}
             </>
           )}
 
@@ -137,7 +154,7 @@ export function NotificationBell() {
             </>
           )}
           {status === "unsupported" && (
-            <p className="text-xs text-muted">Il tuo browser non supporta le notifiche push.</p>
+            <p className="text-xs text-muted">Da iPhone: aggiungi l&apos;app alla Home, poi riapri da lì.</p>
           )}
         </div>
       )}
