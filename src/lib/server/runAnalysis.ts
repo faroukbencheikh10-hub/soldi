@@ -1322,12 +1322,11 @@ export async function runAnalysis(options?: { force?: boolean }) {
     };
   }
 
-  // DIREZIONE DECISA PRIMA DI CHIAMARE L'AI (04/09).
+  // DIREZIONE — ICT originale.
   //
-  // Prima H1, poi H4. Se entrambi sono laterali non si blocca piu' il ciclo:
-  // in ICT il laterale HTF e' il contesto dello sweep, e la direzione del
-  // setup nasce su M15 (evento CHoCH/BOS, altrimenti il bias M15).
-  // Si salta l'AI solo se non c'e' direzione nemmeno li', o se manca l'ATR.
+  // Il setup nasce su M15 (evento CHoCH/BOS, altrimenti bias M15).
+  // H1/H4 sono la narrativa: se hanno un bias CONTRARIO al setup, il trade
+  // non si fa. Se sono laterali, non bloccano. Non decidono il verso.
   const biasH1Pre = (marketSnapshot.ictStrutturaH1 as { bias?: string } | undefined)?.bias ?? "laterale";
   const biasH4Pre = (marketSnapshot.ictStrutturaH4 as { bias?: string } | undefined)?.bias ?? "laterale";
   const strutturaM15Pre = marketSnapshot.ictStrutturaM15 as
@@ -1339,21 +1338,24 @@ export async function runAnalysis(options?: { force?: boolean }) {
   const versoDaEvento = (d: string | null | undefined): "BUY" | "SELL" | null =>
     d === "rialzista" ? "BUY" : d === "ribassista" ? "SELL" : null;
 
-  let fonteDirezione: "H1" | "H4" | "M15-evento" | "M15-bias" | null = null;
-  let direzioneCodice: "BUY" | "SELL" | null = versoDa(biasH1Pre);
+  let fonteDirezione: "M15-evento" | "M15-bias" | null = null;
+  let direzioneCodice: "BUY" | "SELL" | null = versoDaEvento(strutturaM15Pre?.direzioneEvento ?? null);
   if (direzioneCodice) {
-    fonteDirezione = "H1";
+    fonteDirezione = "M15-evento";
   } else {
-    direzioneCodice = versoDa(biasH4Pre);
-    if (direzioneCodice) fonteDirezione = "H4";
-  }
-  if (!direzioneCodice) {
-    direzioneCodice = versoDaEvento(strutturaM15Pre?.direzioneEvento ?? null);
-    if (direzioneCodice) fonteDirezione = "M15-evento";
-  }
-  if (!direzioneCodice) {
     direzioneCodice = versoDa(biasM15Pre);
     if (direzioneCodice) fonteDirezione = "M15-bias";
+  }
+
+  const narrativaH1 = versoDa(biasH1Pre);
+  const narrativaH4 = versoDa(biasH4Pre);
+  const narrativaHtF = narrativaH1 ?? narrativaH4;
+  const fonteNarrativa = narrativaH1 ? "H1" : narrativaH4 ? "H4" : null;
+  const controNarrativa =
+    direzioneCodice !== null && narrativaHtF !== null && direzioneCodice !== narrativaHtF;
+  if (controNarrativa) {
+    direzioneCodice = null;
+    fonteDirezione = null;
   }
 
   // Livelli calcolati subito, sullo stesso prezzo con cui l'AI ragionera'.
@@ -1362,9 +1364,8 @@ export async function runAnalysis(options?: { force?: boolean }) {
   const livelliCalcolabili =
     Number.isFinite(atrPre) && atrPre > 0 && Number.isFinite(prezzoPre) && prezzoPre > 0;
   const notaHtF =
-    fonteDirezione === "M15-evento" || fonteDirezione === "M15-bias"
-      ? `H1 e H4 laterali: direzione presa da ${fonteDirezione} (${strutturaM15Pre?.evento ?? "nessun evento"} / bias ${biasM15Pre}). Approva solo se il percorso ICT su M15 regge; altrimenti NO_TRADE.`
-      : "Direzione e livelli sono gia' decisi dal codice e non vanno cambiati. Rispondi solo se i requisiti del setup reggono questo trade: se si', ripeti questa direzione; altrimenti NO_TRADE.";
+    "Direzione dal setup M15 (ICT). H1/H4 filtrano solo se contrari. " +
+    "Ripeti questa direzione se il percorso sweep/CHoCH/displacement/pullback regge; altrimenti NO_TRADE.";
   const tradeProposto =
     direzioneCodice && livelliCalcolabili
       ? (() => {
@@ -1384,9 +1385,11 @@ export async function runAnalysis(options?: { force?: boolean }) {
       : null;
 
   if (!force && (!direzioneCodice || !livelliCalcolabili)) {
-    const motivo = !direzioneCodice
-      ? `Nessuna direzione: H1 ${biasH1Pre}, H4 ${biasH4Pre}, M15 ${biasM15Pre} (evento ${strutturaM15Pre?.evento ?? "null"}). AI non chiamata.`
-      : `ATR15m non disponibile (${String(marketSnapshot.atr15m)}): il codice non puo' dimensionare stop e target, AI non chiamata.`;
+    const motivo = !livelliCalcolabili
+      ? `ATR15m non disponibile (${String(marketSnapshot.atr15m)}): il codice non puo' dimensionare stop e target, AI non chiamata.`
+      : controNarrativa
+        ? `Setup M15 ${versoDaEvento(strutturaM15Pre?.direzioneEvento ?? null) ?? versoDa(biasM15Pre)} contro narrativa ${fonteNarrativa} ${narrativaHtF}: in ICT non si trada contro H1/H4. AI non chiamata.`
+        : `Nessun setup M15: evento ${strutturaM15Pre?.evento ?? "null"}, bias ${biasM15Pre}. AI non chiamata.`;
     const skippedSignal = validateSignal({
       direction: "NO_TRADE",
       entry: null,
@@ -1460,7 +1463,7 @@ export async function runAnalysis(options?: { force?: boolean }) {
       tp1: 0,
       tp2: 0,
       riskReward: 0,
-      reasoning: `${signal.reasoning ?? ""}\n\n[Nessun trade: il codice proponeva ${tradeProposto.direzione} (fonte ${fonteDirezione}, H1 ${biasH1Pre}, H4 ${biasH4Pre}, M15 ${biasM15Pre}) e l'AI ha risposto ${signal.direction}: non e' un'approvazione.]`,
+      reasoning: `${signal.reasoning ?? ""}\n\n[Nessun trade: il codice proponeva ${tradeProposto.direzione} da ${fonteDirezione} (narrativa H1 ${biasH1Pre}, H4 ${biasH4Pre}) e l'AI ha risposto ${signal.direction}: non e' un'approvazione.]`,
     } as never);
   }
 
