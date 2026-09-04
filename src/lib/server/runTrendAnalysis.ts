@@ -82,8 +82,6 @@ export async function runTrendAnalysis(options?: { force?: boolean }) {
     candles: marketSnapshot.candles,
   });
 
-  const confidence = setup.setup === "orb" ? 70 : setup.setup === "fade" ? 58 : 0;
-
   const signal = setup.ok && setup.direzione
     ? validateSignal({
         direction: setup.direzione,
@@ -92,7 +90,7 @@ export async function runTrendAnalysis(options?: { force?: boolean }) {
         tp1: setup.tp1,
         tp2: setup.tp2,
         riskReward: setup.rischioRendimento,
-        confidence,
+        confidence: 70,
         reasoning: setup.motivo,
       })
     : validateSignal({
@@ -111,7 +109,7 @@ export async function runTrendAnalysis(options?: { force?: boolean }) {
   if (signal.direction === "BUY" || signal.direction === "SELL") {
     const prezzoTesto = Number(marketSnapshot.xauusd).toFixed(2);
     sendPushToAll({
-      title: `${signal.direction} · ${setup.setup} · ${prezzoTesto}`,
+      title: `${signal.direction} · ORB · ${prezzoTesto}`,
       body: `Entry ${Number(signal.entry).toFixed(2)} · SL ${Number(signal.stopLoss).toFixed(2)} · TP1 ${Number(signal.tp1).toFixed(2)} · TP2 ${Number(signal.tp2).toFixed(2)}`,
       url: "/",
     }).catch(() => undefined);

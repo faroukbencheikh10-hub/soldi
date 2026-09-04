@@ -1,10 +1,12 @@
 # Soldi ORB (branch trend-no-ict)
 
-Strategia: **Session ORB** (Opening Range Breakout + Asia Range Fade).
-Niente ICT, niente AI, niente bias H4.
+Strategia: **ORB M5**. Niente ICT, niente AI, niente filtri orari.
+Gira quando il mercato oro e' aperto (24/5).
 
-- Asia 21:00-07:00 UTC: fade i bordi del range se ≤15$. TP 6/8$.
-- Londra 07:00-12:00 UTC: chiusura M5 fuori dal range Asia. Stop lato opposto.
-- New York 12:00-17:00 UTC: stesso ORB sul range Londra, o box M5 nuovo se Londra ha già corso ≥20$.
-- Niente inseguimento oltre 8$ dal bordo. Niente candele shock ≥20$.
-- 17:00-21:00 UTC: NO_TRADE.
+- Box = ultime 8–16 M5 prima della candela attuale, altezza 5–18$.
+- Entry = chiusura M5 fuori dal box.
+- Stop = lato opposto del box.
+- TP1/TP2 = 12$ / 20$ (o 1.6R / 2.4R se lo stop e' largo).
+- Niente inseguimento oltre 8$ dal bordo.
+- Niente candela shock >= 20$.
+- News high impact +/- 30 min = NO_TRADE.

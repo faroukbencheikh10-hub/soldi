@@ -13,7 +13,7 @@ export function AppHeader({ quote }: { quote: MarketQuote }) {
           </div>
           <div>
             <div className="text-sm font-semibold text-text leading-none">Soldi ORB</div>
-            <div className="text-[11px] text-muted leading-none mt-0.5">XAUUSD · Session ORB · fade Asia · break Londra/NY</div>
+            <div className="text-[11px] text-muted leading-none mt-0.5">XAUUSD · ORB M5 · 24/5 · niente orari</div>
           </div>
         </div>
 
