@@ -1,6 +1,6 @@
 // Valutazione setup ICT originale (Huddleston).
-// CHoCH/BOS M15 + displacement -> si PREVEDE il pullback sulla zona.
-// L'entry e' il bordo dell'OB/FVG, non il prezzo gia' corso.
+// CHoCH/BOS M15 + displacement + zona valida -> segnale SUBITO.
+// Entry = prezzo corrente: si entra a mercato appena nasce, niente attesa.
 export type DirezioneTrade = "BUY" | "SELL";
 
 export interface SetupIctOriginale {
@@ -18,14 +18,8 @@ export interface SetupIctOriginale {
 const TP1_IN_R = 1.8;
 const TP2_IN_R = 3.0;
 const TOLL_ZONA_ATR = 0.15;
-const MAX_ATTESA_ATR = 2.5;
 
 type Zona = { direzione: string; top: number; bottom: number; tipo: string };
-
-function dentroZona(prezzo: number, z: Zona, atr: number): boolean {
-  const t = Math.max(0, atr) * TOLL_ZONA_ATR;
-  return prezzo <= z.top + t && prezzo >= z.bottom - t;
-}
 
 export function valutaSetupIctOriginale(input: {
   prezzo: number;
@@ -104,7 +98,7 @@ export function valutaSetupIctOriginale(input: {
   ].filter((z) => z.direzione === dirZona && Number.isFinite(z.top) && Number.isFinite(z.bottom) && z.top > z.bottom);
 
   if (zone.length === 0) {
-    return no(`Nessuna zona M15 ${dirZona} (Order Block / FVG) per l'entry.`);
+    return no(`Nessuna zona M15 ${dirZona} (Order Block / FVG) per lo stop.`);
   }
 
   const ote = input.oteM15;
@@ -121,8 +115,8 @@ export function valutaSetupIctOriginale(input: {
   if (candidate.length === 0) {
     return no(
       direzione === "BUY"
-        ? "Zona M15 gia' rotta al ribasso: il pullback previsto e' invalidato."
-        : "Zona M15 gia' rotta al rialzo: il pullback previsto e' invalidato."
+        ? "Zona M15 gia' rotta al ribasso: setup invalidato."
+        : "Zona M15 gia' rotta al rialzo: setup invalidato."
     );
   }
 
@@ -130,24 +124,14 @@ export function valutaSetupIctOriginale(input: {
     const aOte = oteBasso !== null && a.bottom <= oteAlto! && a.top >= oteBasso ? 1 : 0;
     const bOte = oteBasso !== null && b.bottom <= oteAlto! && b.top >= oteBasso ? 1 : 0;
     if (bOte !== aOte) return bOte - aOte;
-    const entryA = direzione === "BUY" ? a.top : a.bottom;
-    const entryB = direzione === "BUY" ? b.top : b.bottom;
-    return Math.abs(prezzo - entryA) - Math.abs(prezzo - entryB);
+    const stopA = direzione === "BUY" ? a.bottom : a.top;
+    const stopB = direzione === "BUY" ? b.bottom : b.top;
+    return Math.abs(prezzo - stopA) - Math.abs(prezzo - stopB);
   });
   const zona = candidate[0];
 
   const segno = direzione === "BUY" ? 1 : -1;
-  const bordo = direzione === "BUY" ? zona.top : zona.bottom;
-  const inZona = dentroZona(prezzo, zona, atr);
-  const entry = Number((inZona ? prezzo : bordo).toFixed(2));
-
-  const distEntry = Math.abs(prezzo - entry);
-  if (!inZona && distEntry > atr * MAX_ATTESA_ATR) {
-    return no(
-      `Displacement gia' troppo lontano dalla zona (${(distEntry / atr).toFixed(1)} ATR). Pullback non piu' prevedibile.`
-    );
-  }
-
+  const entry = Number(prezzo.toFixed(2));
   const stopZona = direzione === "BUY" ? zona.bottom : zona.top;
   let stopLoss = Number(stopZona.toFixed(2));
   if (Math.abs(entry - stopLoss) < atr * 0.4) {
@@ -159,9 +143,6 @@ export function valutaSetupIctOriginale(input: {
   const tp2 = Number((entry + segno * rischio * TP2_IN_R).toFixed(2));
 
   const oteNota = oteBasso !== null && zona.bottom <= oteAlto! && zona.top >= oteBasso ? " in fascia OTE" : "";
-  const fase = inZona
-    ? "prezzo gia' in zona, eseguibile"
-    : `ordine limite previsto a ${entry.toFixed(2)}, prezzo ora ${prezzo.toFixed(2)}`;
 
   return {
     ok: true,
@@ -172,6 +153,6 @@ export function valutaSetupIctOriginale(input: {
     tp2,
     rischioRendimento: TP1_IN_R,
     zona: `${zona.tipo} ${dirZona} ${zona.bottom.toFixed(2)}-${zona.top.toFixed(2)}${oteNota}`,
-    motivo: `ICT originale: ${evento} M15 ${dirZona}, displacement. ${fase}. Zona ${zona.tipo}, kill zone ${kz}.`,
+    motivo: `ICT originale: ${evento} M15 ${dirZona}, displacement. Entrata a mercato subito a ${entry.toFixed(2)}. Zona ${zona.tipo}, kill zone ${kz}.`,
   };
 }
