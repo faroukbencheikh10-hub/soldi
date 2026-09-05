@@ -10,6 +10,7 @@ import { MarketHoursCompact } from "@/components/market-hours-compact";
 import { ContextFeed } from "@/components/context-feed";
 import { PerformanceStatsPanel } from "@/components/performance-stats";
 import { TradeFolder } from "@/components/trade-folder";
+import { ContoDelGiorno } from "@/components/ContoDelGiorno";
 import { SIGNAL_HISTORY as DEMO_HISTORY } from "@/lib/mock-data";
 import { MarketQuote, TradeSignal, PerformanceStats } from "@/lib/types";
 import {
@@ -140,6 +141,7 @@ export default async function Home() {
           </div>
 
           <div className="space-y-5">
+            <ContoDelGiorno />
             <AiPauseToggle />
             <ChiamateToggle />
             <GenerateSignalButton />
