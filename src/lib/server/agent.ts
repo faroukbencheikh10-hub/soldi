@@ -1,4 +1,5 @@
 import { SYSTEM_PROMPT, SYSTEM_PROMPT_5M } from "@/lib/server/agentPrompt";
+import { filtraSegnaleSulDaily } from "@/lib/server/filtroDaily";
 import {
   buildCompactCalendarContext,
   getMarketCalendarContext,
@@ -169,15 +170,11 @@ export function buildAiPayload({
 }) {
   const prezzo = marketSnapshot.xauusd;
   const ob = (v: unknown) => vicine(v as { top: number; bottom: number }[] | undefined, prezzo);
-
   const alias = new Map<string, string>();
   eventiAttivi.forEach((e, i) => alias.set(e.id, `E${i + 1}`));
-
   const eventiInChiaro = eventiAttivi.map(
-    (e) =>
-      `${alias.get(e.id)} = ${e.tipo} ${e.timeframe} ${e.direzione} ${Number(e.livello).toFixed(2)} (${e.candelaTs})`
+    (e) => `${alias.get(e.id)} = ${e.tipo} ${e.timeframe} ${e.direzione} ${Number(e.livello).toFixed(2)} (${e.candelaTs})`
   );
-
   const alleggerisci = (tf: Record<string, unknown> | undefined, tieniZone: boolean) => {
     if (!tf) return null;
     const { zoneVicine, eventiAttiviIds, ...resto } = tf as Record<string, unknown> & {
@@ -190,7 +187,6 @@ export function buildAiPayload({
       ...(tieniZone ? { zoneVicine } : {}),
     };
   };
-
   const memoria = {
     prezzo: memoriaMercato.prezzo,
     aggiornatoIl: memoriaMercato.aggiornatoIl,
@@ -199,7 +195,6 @@ export function buildAiPayload({
     liquidita24h: memoriaMercato.liquidita24h,
     eventiInvalidati: memoriaMercato.eventiInvalidati,
   };
-
   return {
     prezzo_attuale_xauusd: marketSnapshot.xauusd,
     variazione_pct_xauusd: marketSnapshot.xauusdChangePct,
@@ -284,42 +279,17 @@ async function callOpenAI(systemPrompt: string, userPayload: unknown) {
       ],
     }),
   });
-
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`OpenAI errore ${res.status}: ${text}`);
   }
-
   const data = await res.json();
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error("Risposta OpenAI vuota");
   return content;
 }
 
-const SCENARIO_PROMPT = `Sei un analista macro specializzato su XAUUSD (oro). Ricevi un evento economico IMMINENTE, il contesto di mercato attuale e le notizie recenti.
-
-NON devi prevedere il valore che uscira'. Il consenso e' gia' noto e gia' prezzato: una previsione sul numero non ha valore. Se ti viene la tentazione di dire "probabilmente uscira' sopra le attese", fermati: non e' il tuo compito.
-
-Devi produrre una MAPPA DI REAZIONE: tre rami condizionali con soglie numeriche esplicite, basati sulla relazione fra il dato, il dollaro e l'oro.
-
-Considera:
-- la direzione della relazione (dato USA forte -> dollaro forte -> oro debole, e viceversa)
-- il posizionamento attuale: se l'oro e' gia' salito molto nelle ultime ore, una sorpresa nella stessa direzione ha meno spazio
-- le notizie recenti: un contesto geopolitico o dichiarazioni politiche possono attenuare o amplificare la reazione al dato, e in certi casi dominarla del tutto
-- il livello del dollar index e dei rendimenti a 10 anni forniti nel contesto
-
-Rispondi SOLO con questo JSON, senza testo attorno:
-{
-  "evento": "nome dell'evento",
-  "consenso": "valore atteso, come stringa",
-  "ramo_sopra": { "soglia": "es. sopra 56.5", "direzione_oro": "ribassista|rialzista", "forza": "debole|media|forte", "cosa_fare": "una frase operativa" },
-  "ramo_sotto": { "soglia": "es. sotto 54.0", "direzione_oro": "ribassista|rialzista", "forza": "debole|media|forte", "cosa_fare": "una frase operativa" },
-  "ramo_in_linea": { "soglia": "es. fra 54.0 e 56.5", "direzione_oro": "nessuna", "forza": "debole", "cosa_fare": "una frase operativa" },
-  "avvertenza": "il rischio principale di questa lettura, una frase",
-  "confidenza_mappa": 0-100
-}
-
-"confidenza_mappa" NON e' la confidenza su cosa uscira': e' quanto ti fidi che la RELAZIONE dato->oro tenga in questo contesto specifico. Se ci sono notizie che possono dominare il dato (tensioni geopolitiche, dichiarazioni sulla politica monetaria, dazi), abbassala e dillo nell'avvertenza.`;
+const SCENARIO_PROMPT = `Sei un analista macro specializzato su XAUUSD (oro). Ricevi un evento economico IMMINENTE, il contesto di mercato attuale e le notizie recenti.\n\nNON devi prevedere il valore che uscira'. Il consenso e' gia' noto e gia' prezzato.\nDevi produrre una MAPPA DI REAZIONE: tre rami condizionali.\nRispondi SOLO con JSON: evento, consenso, ramo_sopra, ramo_sotto, ramo_in_linea, avvertenza, confidenza_mappa.`;
 
 export async function generaScenarioNotizia({
   evento,
@@ -352,7 +322,9 @@ export async function generaScenarioNotizia({
 
 export async function generateSignalDaPayload(userPayload: unknown) {
   const content = await callOpenAI(SYSTEM_PROMPT, userPayload);
-  return JSON.parse(content);
+  const parsed = JSON.parse(content);
+  const bias = (userPayload as { bias_d1?: string } | null)?.bias_d1;
+  return filtraSegnaleSulDaily(parsed, bias);
 }
 
 export async function generateSignal({
@@ -390,7 +362,7 @@ export async function generateSignal({
     tradeProposto: tradeProposto ?? null,
   });
   const content = await callOpenAI(SYSTEM_PROMPT, userPayload);
-  const parsed = JSON.parse(content);
+  const parsed = filtraSegnaleSulDaily(JSON.parse(content), marketSnapshot.biasD1);
   return { ...parsed, marketSnapshot };
 }
 
@@ -405,6 +377,6 @@ export async function generateSignal5m({
 }) {
   const userPayload = buildUserPayload({ marketSnapshot, news, calendar });
   const content = await callOpenAI(SYSTEM_PROMPT_5M, userPayload);
-  const parsed = JSON.parse(content);
+  const parsed = filtraSegnaleSulDaily(JSON.parse(content), marketSnapshot.biasD1);
   return { ...parsed, marketSnapshot };
 }
