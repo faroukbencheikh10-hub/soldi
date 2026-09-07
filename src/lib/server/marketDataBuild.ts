@@ -25,6 +25,21 @@ import {
 } from "@/lib/server/marketData";
 import { computeLiquidity24h, type Candle } from "@/lib/server/marketDataFns";
 
+function rangeDailyAttuale(c1d: Candle[] | null | undefined): { high: number; low: number } | null {
+  if (!Array.isArray(c1d) || c1d.length === 0) return null;
+  const conData = c1d
+    .map((c) => ({
+      high: Number(c.high),
+      low: Number(c.low),
+      t: new Date(c.datetime).getTime(),
+    }))
+    .filter((x) => Number.isFinite(x.high) && Number.isFinite(x.low) && x.high >= x.low && Number.isFinite(x.t))
+    .sort((a, b) => b.t - a.t);
+  if (conData.length === 0) return null;
+  const oggi = conData[0];
+  return { high: Number(oggi.high.toFixed(2)), low: Number(oggi.low.toFixed(2)) };
+}
+
 export async function costruisciSnapshot(input: {
   xau: { close: number; percent_change: number; quotedAt: number | null };
   c5: Candle[];
@@ -48,6 +63,7 @@ export async function costruisciSnapshot(input: {
   const atr1h = computeATR(c1h, 14);
   const biasD1 = c1d ? computeStructure(c1d).bias : "laterale";
   const biasH4 = c4h.length ? computeStructure(c4h).bias : "laterale";
+  const dailyRange = rangeDailyAttuale(c1d);
   const composto = c1d
     ? componiBiasIct(biasD1, biasH4)
     : { ictBias: "laterale" as const, h4Conferma: "sconosciuto" as const };
@@ -80,6 +96,7 @@ export async function costruisciSnapshot(input: {
     us10yAgeMinutes: macro.us10y.ageMinutes,
     biasD1,
     biasH4,
+    dailyRange,
     h4Conferma: composto.h4Conferma,
     ictBias: composto.ictBias,
     livelliApertura: calcolaLivelliApertura(c1d ?? [], xau.close),
