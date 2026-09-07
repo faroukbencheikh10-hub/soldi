@@ -1,41 +1,20 @@
-import { getMacroContext } from "@/lib/server/macroData";
-import { computeATR } from "@/lib/server/atr";
-import {
-  calcolaLivelliApertura,
-  killZoneCorrente,
-  rilevaJudasSwing,
-  oteDaSwing,
-  type Ote,
-  type LivelliApertura,
-  type ContestoKillZone,
-  type JudasSwing,
-} from "@/lib/server/ictOriginale";
-import { computeLevels, type Levels } from "@/lib/server/levels";
-import { computeLevels5m, type Levels5m } from "@/lib/server/levels5m";
-import { computeLevels30m, type Levels30m } from "@/lib/server/levels30m";
-import { computeRejection, type RejectionSignal } from "@/lib/server/rejection";
-import {
-  computeStructure,
-  computeSwings,
-  computeOrderBlocks,
-  computeFVG,
-  computeEqualLevels,
-  type StructureResult,
-  type OrderBlock,
-  type FVG,
-  type LivelliUguali,
+import { getMarketCalendarContext, type MarketCalendarContext } from "@/lib/server/marketCalendar";
+import type { Levels } from "@/lib/server/levels";
+import type { Levels5m } from "@/lib/server/levels5m";
+import type { Levels30m } from "@/lib/server/levels30m";
+import type { RejectionSignal } from "@/lib/server/rejection";
+import type {
+  StructureResult,
+  OrderBlock,
+  FVG,
+  LivelliUguali,
 } from "@/lib/server/ictStructure";
-import {
-  metaApiFetchQuote,
-  metaApiFetchTimeSeries,
-  isMetaApiPriceStale,
-} from "@/lib/server/metaApiData";
-import {
-  getMarketCalendarContext,
-  type MarketCalendarContext,
-} from "@/lib/server/marketCalendar";
-
-const TD_BASE = "https://api.twelvedata.com";
+import type {
+  Ote,
+  LivelliApertura,
+  ContestoKillZone,
+  JudasSwing,
+} from "@/lib/server/ictOriginale";
 
 function newYorkDayAndHour(date: Date): { day: number; hour: number } | null {
   try {
@@ -45,17 +24,14 @@ function newYorkDayAndHour(date: Date): { day: number; hour: number } | null {
       hour: "2-digit",
       hourCycle: "h23",
     }).formatToParts(date);
-
     const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
     const hourText = parts.find((p) => p.type === "hour")?.value ?? "";
-
     const days: Record<string, number> = {
       Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
     };
     const day = days[weekday];
     const hour = Number(hourText);
     if (day === undefined || !Number.isFinite(hour)) return null;
-
     return { day, hour };
   } catch {
     return null;
@@ -64,9 +40,7 @@ function newYorkDayAndHour(date: Date): { day: number; hour: number } | null {
 
 export function isMarketOpen(date: Date = new Date()): boolean {
   const ny = newYorkDayAndHour(date);
-
   if (ny === null) return true;
-
   if (ny.day === 6) return false;
   if (ny.day === 0) return ny.hour >= 18;
   if (ny.day === 5) return ny.hour < 17;
@@ -82,17 +56,14 @@ function minutesSinceMidnight(date: Date, timeZone: string): { day: number; minu
       minute: "2-digit",
       hourCycle: "h23",
     }).formatToParts(date);
-
     const weekday = parts.find((p) => p.type === "weekday")?.value ?? "";
     const hour = Number(parts.find((p) => p.type === "hour")?.value);
     const minute = Number(parts.find((p) => p.type === "minute")?.value);
-
     const days: Record<string, number> = {
       Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
     };
     const day = days[weekday];
     if (day === undefined || !Number.isFinite(hour) || !Number.isFinite(minute)) return null;
-
     return { day, minutes: hour * 60 + minute };
   } catch {
     return null;
@@ -112,30 +83,12 @@ const NY_OPEN_MIN = 9 * 60 + 30;
 const NY_CLOSE_MIN = 16 * 60;
 const FINESTRA_VOLATILE_MIN = 45;
 
-function computeLiquidity24h(candles1h: Candle[] | undefined): { massimo: number; minimo: number } | null {
-  if (!Array.isArray(candles1h) || candles1h.length < 24) return null;
-  const finestra = candles1h.slice(0, 24);
-  const massimi = finestra.map((c) => Number(c.high)).filter(Number.isFinite);
-  const minimi = finestra.map((c) => Number(c.low)).filter(Number.isFinite);
-  if (massimi.length === 0 || minimi.length === 0) return null;
-  return { massimo: Number(Math.max(...massimi).toFixed(2)), minimo: Number(Math.min(...minimi).toFixed(2)) };
-}
-
-/**
- * Sessione corrente e minuti dall'apertura.
- *
- * La finestra oraria resta quella di sempre (Londra 08:00-16:30, New York
- * 09:30-16:00), ma una sessione conta solo se quel mercato risulta realmente
- * OPEN in quel momento. Cosi' un lunedi' festivo non risulta piu' "londra".
- * Nient'altro cambia: il fallback resta "asia" come prima.
- */
 export function computeSessionInfo(
   date: Date = new Date(),
   calendario: MarketCalendarContext = getMarketCalendarContext(date)
 ): SessionInfo {
   const london = minutesSinceMidnight(date, "Europe/London");
   const ny = minutesSinceMidnight(date, "America/New_York");
-
   const londonOpen =
     calendario.london.today.status === "open" &&
     london !== null && london.day >= 1 && london.day <= 5 &&
@@ -144,101 +97,17 @@ export function computeSessionInfo(
     calendario.new_york.today.status === "open" &&
     ny !== null && ny.day >= 1 && ny.day <= 5 &&
     ny.minutes >= NY_OPEN_MIN && ny.minutes < NY_CLOSE_MIN;
-
   let sessione: SessionInfo["sessione"];
   if (londonOpen && nyOpen) sessione = "londra_new_york";
   else if (londonOpen) sessione = "londra";
   else if (nyOpen) sessione = "new_york";
   else sessione = "asia";
-
   const minutiDaAperturaLondra = londonOpen && london !== null ? london.minutes - LONDON_OPEN_MIN : null;
   const minutiDaAperturaNewYork = nyOpen && ny !== null ? ny.minutes - NY_OPEN_MIN : null;
-
   const finestraAperturaVolatile =
     (minutiDaAperturaLondra !== null && minutiDaAperturaLondra < FINESTRA_VOLATILE_MIN) ||
     (minutiDaAperturaNewYork !== null && minutiDaAperturaNewYork < FINESTRA_VOLATILE_MIN);
-
   return { sessione, minutiDaAperturaLondra, minutiDaAperturaNewYork, finestraAperturaVolatile };
-}
-
-interface Candle {
-  open: string;
-  high: string;
-  low: string;
-  close: string;
-  /**
-   * SEMPRE UTC in formato ISO con la "Z" finale. E' l'unico campo temporale
-   * che il resto dell'app deve leggere: setup_events, TTL, sessioni, scenari
-   * e confronti fra timeframe si basano solo su questo.
-   */
-  datetime: string;
-  /** La stringa esatta ricevuta dal provider, conservata per diagnostica. */
-  rawBrokerTime?: string;
-  /** Come e' stata interpretata quella stringa. */
-  brokerTimezone?: string;
-}
-
-/**
- * Scarta le candele che risultano nel futuro. Con dati sani non ne esiste
- * nessuna: l'ultima candela e' quella in formazione, che parte nel passato.
- * Una candela nel futuro significa timestamp non normalizzato, e da li' in
- * poi TTL e invalidazioni degli eventi diventano insensati.
- */
-function scartaCandeleNelFuturo(candele: Candle[], etichetta: string): Candle[] {
-  const limite = Date.now() + TOLLERANZA_FUTURO_MS;
-  const buone = candele.filter((c) => {
-    const ms = new Date(c.datetime).getTime();
-    return Number.isFinite(ms) && ms <= limite;
-  });
-  if (buone.length !== candele.length) {
-    console.error(
-      `[marketData] ${candele.length - buone.length} candele ${etichetta} nel futuro scartate (timestamp non normalizzato)`
-    );
-  }
-  return buone;
-}
-
-/** Piccolo margine per lo scarto fra orologio del provider e orologio nostro. */
-const TOLLERANZA_FUTURO_MS = 2 * 60 * 1000;
-
-/** Come scartaCandeleNelFuturo, ma tollera l'assenza dell'array. */
-function scarta(candele: Candle[] | null, etichetta: string): Candle[] | null {
-  return candele ? scartaCandeleNelFuturo(candele, etichetta) : null;
-}
-
-/**
- * Twelve Data restituisce "YYYY-MM-DD HH:MM:SS" senza offset. Con
- * &timezone=UTC nella richiesta quella stringa E' gia' UTC, quindi qui basta
- * renderla esplicita aggiungendo la "Z". Non sottraiamo mai un offset a mano:
- * la conversione la fa il provider, noi la rendiamo solo inequivocabile.
- */
-function normalizzaCandeleTwelveData(grezze: unknown, etichetta: string): Candle[] | null {
-  if (!Array.isArray(grezze)) return null;
-  const out: Candle[] = [];
-  let scartate = 0;
-  for (const c of grezze as Array<Record<string, string>>) {
-    const raw = String(c?.datetime ?? "");
-    const iso = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw) ? raw : `${raw.replace(" ", "T")}Z`;
-    const ms = new Date(iso).getTime();
-    if (!Number.isFinite(ms)) {
-      scartate += 1;
-      continue;
-    }
-    out.push({
-      open: String(c.open),
-      high: String(c.high),
-      low: String(c.low),
-      close: String(c.close),
-      datetime: new Date(ms).toISOString(),
-      rawBrokerTime: raw,
-      brokerTimezone: "UTC (richiesto esplicitamente a Twelve Data con timezone=UTC)",
-    });
-  }
-  if (scartate > 0) {
-    console.error(`[marketData] ${scartate} candele ${etichetta} Twelve Data con datetime illeggibile`);
-  }
-  if (out.length === 0) return null;
-  return scartaCandeleNelFuturo(out, `${etichetta} (twelvedata)`);
 }
 
 type BiasVerso = "rialzista" | "ribassista" | "laterale";
@@ -277,7 +146,6 @@ export interface MarketSnapshot {
   levels5m: Levels5m;
   levels30m: Levels30m;
   session: SessionInfo;
-  /** Stato odierno dei quattro mercati (aperto/chiuso + festivita'). Contesto, non filtro. */
   marketCalendar: MarketCalendarContext;
   rigetto5m: RejectionSignal;
   rigetto15m: RejectionSignal;
@@ -290,16 +158,11 @@ export interface MarketSnapshot {
   ictBias: "rialzista" | "ribassista" | "laterale" | "in disaccordo";
   biasD1: string;
   biasH4: string;
-  /** H4 rispetto al Daily: allineato conferma, contrario = pullback non nuovo bias. */
   h4Conferma: H4Conferma;
-  // Concetti ICT originali (vedi ictOriginale.ts)
   livelliApertura: LivelliApertura;
-  /** Fascia 62-79% dell'ultimo impulso M15: dove entrare dentro la zona. */
   oteM15: Ote | null;
   killZone: ContestoKillZone;
   judasSwing: JudasSwing;
-  // H4: CONFERMA del Daily. Zone e draw restano utili, ma non decidono
-  // la direzione. Se H4 e' contrario al Daily e' un pullback, non un bias nuovo.
   ictStrutturaH4: StructureResult;
   ictOrderBlocksH4: OrderBlock[];
   ictFvgH4: FVG[];
@@ -320,3 +183,15 @@ export interface MarketSnapshot {
   ictOrderBlocksM5: OrderBlock[];
   ictFvgM5: FVG[];
 }
+
+interface Candle {
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  datetime: string;
+  rawBrokerTime?: string;
+  brokerTimezone?: string;
+}
+
+export { getCurrentPrice, getMarketSnapshot } from "@/lib/server/marketDataFns";
