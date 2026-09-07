@@ -168,6 +168,7 @@ export interface MarketSnapshot {
   biasD1: string;
   biasH4: string;
   h4Conferma: H4Conferma;
+  dailyRange: { high: number; low: number } | null;
   livelliApertura: LivelliApertura;
   oteM15: Ote | null;
   killZone: ContestoKillZone;

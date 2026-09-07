@@ -74,11 +74,11 @@ export function valutaSetupIctOriginale(input: {
       ? input.biasD1
       : biasDailyMemorizzato();
   const daily = verso(rawD1);
-  if (!daily) {
-    return no(`Daily laterale o assente (${String(rawD1)}): il 4H non decide la direzione.`);
-  }
-  if (direzione !== daily) {
-    return no(`Setup M15 ${direzione} contro Daily ${daily}: il Daily decide, H4 non ribalta.`);
+  // Daily laterale/assente: nessun veto. La direzione resta quella del setup M15
+  // (H1 come gia' usato a monte). Veto solo controtrend quando il Daily ha verso.
+  if (daily && direzione !== daily) {
+    const etichetta = daily === "BUY" ? "rialzista" : "ribassista";
+    return no(`Setup ${direzione} contro il bias Daily ${etichetta}: NO_TRADE.`);
   }
 
   const rawH4 =

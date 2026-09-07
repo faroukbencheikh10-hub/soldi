@@ -35,6 +35,7 @@ interface MarketSnapshot {
   biasD1?: string;
   biasH4?: string;
   h4Conferma?: string;
+  dailyRange?: { high: number; low: number } | null;
   livelliApertura?: unknown;
   oteM15?: unknown;
   killZone?: unknown;
@@ -97,6 +98,7 @@ export function buildUserPayload({
     ict_bias: marketSnapshot.ictBias ?? "laterale",
     bias_d1: marketSnapshot.biasD1 ?? "sconosciuto",
     bias_h4: marketSnapshot.biasH4 ?? "sconosciuto",
+    dailyRange: marketSnapshot.dailyRange ?? null,
     ict_struttura_m30: marketSnapshot.ictStrutturaM30 ?? null,
     ict_order_block_m30: marketSnapshot.ictOrderBlocksM30 ?? [],
     ict_fvg_m30: marketSnapshot.ictFvgM30 ?? [],
@@ -225,6 +227,7 @@ export function buildAiPayload({
     bias_d1: marketSnapshot.biasD1 ?? "sconosciuto",
     bias_h4: marketSnapshot.biasH4 ?? "sconosciuto",
     h4_conferma: marketSnapshot.h4Conferma ?? "sconosciuto",
+    dailyRange: marketSnapshot.dailyRange ?? null,
     sintesi_d1_h4: {
       bias_d1: marketSnapshot.biasD1 ?? "sconosciuto",
       bias_h4: marketSnapshot.biasH4 ?? "sconosciuto",
