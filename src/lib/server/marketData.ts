@@ -113,7 +113,6 @@ export function computeSessionInfo(
 type BiasVerso = "rialzista" | "ribassista" | "laterale";
 export type H4Conferma = "allineato" | "contrario" | "laterale" | "sconosciuto";
 
-/** Daily decide la direzione. H4 conferma o segnala pullback. Non votano alla pari. */
 export function componiBiasIct(biasD1: string, biasH4: string): {
   ictBias: "rialzista" | "ribassista" | "laterale" | "in disaccordo";
   h4Conferma: H4Conferma;
@@ -126,6 +125,16 @@ export function componiBiasIct(biasD1: string, biasH4: string): {
   if (h4 === d1) return { ictBias: d1, h4Conferma: "allineato" };
   if (h4 === "rialzista" || h4 === "ribassista") return { ictBias: d1, h4Conferma: "contrario" };
   return { ictBias: d1, h4Conferma: "laterale" };
+}
+
+interface Candle {
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  datetime: string;
+  rawBrokerTime?: string;
+  brokerTimezone?: string;
 }
 
 export interface MarketSnapshot {
@@ -184,14 +193,4 @@ export interface MarketSnapshot {
   ictFvgM5: FVG[];
 }
 
-interface Candle {
-  open: string;
-  high: string;
-  low: string;
-  close: string;
-  datetime: string;
-  rawBrokerTime?: string;
-  brokerTimezone?: string;
-}
-
-export { getCurrentPrice, getMarketSnapshot } from "@/lib/server/marketDataFns";
+export { getCurrentPrice, getMarketSnapshot } from "@/lib/server/marketDataSnap";
