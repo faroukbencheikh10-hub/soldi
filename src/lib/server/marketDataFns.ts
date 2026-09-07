@@ -1,35 +1,3 @@
-import { getMacroContext } from "@/lib/server/macroData";
-import { computeATR } from "@/lib/server/atr";
-import {
-  calcolaLivelliApertura,
-  killZoneCorrente,
-  rilevaJudasSwing,
-  oteDaSwing,
-} from "@/lib/server/ictOriginale";
-import { computeLevels } from "@/lib/server/levels";
-import { computeLevels5m } from "@/lib/server/levels5m";
-import { computeLevels30m } from "@/lib/server/levels30m";
-import { computeRejection } from "@/lib/server/rejection";
-import {
-  computeStructure,
-  computeSwings,
-  computeOrderBlocks,
-  computeFVG,
-  computeEqualLevels,
-} from "@/lib/server/ictStructure";
-import {
-  metaApiFetchQuote,
-  metaApiFetchTimeSeries,
-  isMetaApiPriceStale,
-} from "@/lib/server/metaApiData";
-import { getMarketCalendarContext } from "@/lib/server/marketCalendar";
-import {
-  computeSessionInfo,
-  componiBiasIct,
-  type MarketSnapshot,
-  type H4Conferma,
-} from "@/lib/server/marketData";
-
 const TD_BASE = "https://api.twelvedata.com";
 
 export interface Candle {
