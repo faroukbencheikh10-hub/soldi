@@ -50,10 +50,7 @@ export async function costruisciSnapshot(input: {
   const biasH4 = c4h.length ? computeStructure(c4h).bias : "laterale";
   const composto = c1d
     ? componiBiasIct(biasD1, biasH4)
-    : {
-        ictBias: (biasH4 === "rialzista" || biasH4 === "ribassista" ? biasH4 : "laterale") as MarketSnapshot["ictBias"],
-        h4Conferma: "sconosciuto" as MarketSnapshot["h4Conferma"],
-      };
+    : { ictBias: "laterale" as const, h4Conferma: "sconosciuto" as const };
   return {
     xauusd: xau.close,
     xauusdChangePct: xau.percent_change,
