@@ -66,15 +66,19 @@ export function valutaSetupIctOriginale(input: {
 
   const verso = (b?: string | null): DirezioneTrade | null =>
     b === "rialzista" ? "BUY" : b === "ribassista" ? "SELL" : null;
+
+  // Daily decide. Se il caller non passa biasD1 (wiring vecchio) non si inventa
+  // una direzione dal 4H: si procede col solo M15. Se lo passa, e' vincolante.
+  const dailyPassato = input.biasD1 !== undefined && input.biasD1 !== null && input.biasD1 !== "";
   const daily = verso(input.biasD1 ?? null);
-  if (!daily) {
+  if (dailyPassato && !daily) {
     return no(`Daily laterale o assente (${String(input.biasD1)}): il 4H non decide la direzione.`);
   }
-  if (direzione !== daily) {
+  if (daily && direzione !== daily) {
     return no(`Setup M15 ${direzione} contro Daily ${daily}: il Daily decide, H4 non ribalta.`);
   }
   const h4 = verso(input.biasH4 ?? null);
-  const confermaH4 = !h4 ? "H4 laterale" : h4 === daily ? "H4 allineato" : "H4 in pullback";
+  const confermaH4 = !h4 ? "H4 laterale" : daily && h4 === daily ? "H4 allineato" : daily && h4 !== daily ? "H4 in pullback" : `H4 ${h4}`;
 
   const disp = input.displacement15m;
   const atrDisp = Number(disp?.ampiezzaImpulsoInAtr);
@@ -132,6 +136,6 @@ export function valutaSetupIctOriginale(input: {
     tp2,
     rischioRendimento: TP1_IN_R,
     zona: zonaTesto,
-    motivo: `ICT: Daily ${daily}, ${confermaH4}. ${evento} M15 ${dirZona}, displacement. Entry ${entry.toFixed(2)}. Stop su ${zonaTesto}.`,
+    motivo: `ICT: Daily ${daily ?? "non passato"}, ${confermaH4}. ${evento} M15 ${dirZona}, displacement. Entry ${entry.toFixed(2)}. Stop su ${zonaTesto}.`,
   };
 }
