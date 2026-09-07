@@ -32,7 +32,7 @@ import {
 
 const TD_BASE = "https://api.twelvedata.com";
 
-interface Candle {
+export interface Candle {
   open: string;
   high: string;
   low: string;
@@ -44,7 +44,7 @@ interface Candle {
 
 const TOLLERANZA_FUTURO_MS = 2 * 60 * 1000;
 
-function scartaCandeleNelFuturo(candele: Candle[], etichetta: string): Candle[] {
+export function scartaCandeleNelFuturo(candele: Candle[], etichetta: string): Candle[] {
   const limite = Date.now() + TOLLERANZA_FUTURO_MS;
   const buone = candele.filter((c) => {
     const ms = new Date(c.datetime).getTime();
@@ -58,11 +58,11 @@ function scartaCandeleNelFuturo(candele: Candle[], etichetta: string): Candle[] 
   return buone;
 }
 
-function scarta(candele: Candle[] | null, etichetta: string): Candle[] | null {
+export function scarta(candele: Candle[] | null, etichetta: string): Candle[] | null {
   return candele ? scartaCandeleNelFuturo(candele, etichetta) : null;
 }
 
-function computeLiquidity24h(candles1h: Candle[] | undefined): { massimo: number; minimo: number } | null {
+export function computeLiquidity24h(candles1h: Candle[] | undefined): { massimo: number; minimo: number } | null {
   if (!Array.isArray(candles1h) || candles1h.length < 24) return null;
   const finestra = candles1h.slice(0, 24);
   const massimi = finestra.map((c) => Number(c.high)).filter(Number.isFinite);
@@ -100,7 +100,7 @@ function normalizzaCandeleTwelveData(grezze: unknown, etichetta: string): Candle
   return scartaCandeleNelFuturo(out, `${etichetta} (twelvedata)`);
 }
 
-async function tdFetchQuote(symbol: string): Promise<{ close: number; percent_change: number; quotedAt: number | null } | null> {
+export async function tdFetchQuote(symbol: string): Promise<{ close: number; percent_change: number; quotedAt: number | null } | null> {
   try {
     const url = `${TD_BASE}/quote?symbol=${encodeURIComponent(symbol)}&apikey=${process.env.TWELVE_DATA_API_KEY}`;
     const res = await fetch(url, { cache: "no-store" });
@@ -117,7 +117,7 @@ async function tdFetchQuote(symbol: string): Promise<{ close: number; percent_ch
   }
 }
 
-async function tdFetchTimeSeries(symbol: string, interval: string, outputsize = 40): Promise<Candle[] | null> {
+export async function tdFetchTimeSeries(symbol: string, interval: string, outputsize = 40): Promise<Candle[] | null> {
   try {
     const url = `${TD_BASE}/time_series?symbol=${encodeURIComponent(
       symbol
