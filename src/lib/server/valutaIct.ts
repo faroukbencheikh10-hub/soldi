@@ -1,6 +1,6 @@
-// Valutazione setup ICT senza pullback e senza veto H4.
-// Sequenza: Judas -> CHoCH/BOS M15 -> displacement -> si entra subito a mercato.
-// H4 e' calcolato a monte e passato all'AI come contesto: qui non blocca nulla.
+// Valutazione setup ICT: Daily decide la direzione, H4 conferma.
+// Sequenza: direzione Daily -> CHoCH/BOS M15 allineato -> displacement.
+// H4 contrario non inverte: e' pullback. H1 non decide.
 export type DirezioneTrade = "BUY" | "SELL";
 
 export interface SetupIctOriginale {
@@ -26,6 +26,7 @@ export function valutaSetupIctOriginale(input: {
   prezzo: number;
   atr15m: number | null;
   strutturaM15?: { evento?: string | null; direzioneEvento?: string | null; bias?: string | null } | null;
+  biasD1?: string | null;
   biasH1?: string | null;
   biasH4?: string | null;
   killZone?: { attuale?: string | null } | null;
@@ -65,10 +66,15 @@ export function valutaSetupIctOriginale(input: {
 
   const verso = (b?: string | null): DirezioneTrade | null =>
     b === "rialzista" ? "BUY" : b === "ribassista" ? "SELL" : null;
-  const h1 = verso(input.biasH1 ?? null);
-  if (h1 && direzione !== h1) {
-    return no(`Setup M15 ${direzione} contro narrativa H1 ${h1}: in ICT non si trada contro H1.`);
+  const daily = verso(input.biasD1 ?? null);
+  if (!daily) {
+    return no(`Daily laterale o assente (${String(input.biasD1)}): il 4H non decide la direzione.`);
   }
+  if (direzione !== daily) {
+    return no(`Setup M15 ${direzione} contro Daily ${daily}: il Daily decide, H4 non ribalta.`);
+  }
+  const h4 = verso(input.biasH4 ?? null);
+  const confermaH4 = !h4 ? "H4 laterale" : h4 === daily ? "H4 allineato" : "H4 in pullback";
 
   const disp = input.displacement15m;
   const atrDisp = Number(disp?.ampiezzaImpulsoInAtr);
@@ -126,6 +132,6 @@ export function valutaSetupIctOriginale(input: {
     tp2,
     rischioRendimento: TP1_IN_R,
     zona: zonaTesto,
-    motivo: `ICT: ${evento} M15 ${dirZona}, displacement. Entrata a mercato a ${entry.toFixed(2)}. Stop su ${zonaTesto}. H4 solo contesto.`,
+    motivo: `ICT: Daily ${daily}, ${confermaH4}. ${evento} M15 ${dirZona}, displacement. Entry ${entry.toFixed(2)}. Stop su ${zonaTesto}.`,
   };
 }
