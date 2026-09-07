@@ -1,6 +1,8 @@
 // Valutazione setup ICT: Daily decide la direzione, H4 conferma.
 // Sequenza: direzione Daily -> CHoCH/BOS M15 allineato -> displacement.
 // H4 contrario non inverte: e' pullback. H1 non decide.
+import { biasDailyMemorizzato, biasH4Memorizzato } from "@/lib/server/ictDirezione";
+
 export type DirezioneTrade = "BUY" | "SELL";
 
 export interface SetupIctOriginale {
@@ -67,18 +69,24 @@ export function valutaSetupIctOriginale(input: {
   const verso = (b?: string | null): DirezioneTrade | null =>
     b === "rialzista" ? "BUY" : b === "ribassista" ? "SELL" : null;
 
-  // Daily decide. Se il caller non passa biasD1 (wiring vecchio) non si inventa
-  // una direzione dal 4H: si procede col solo M15. Se lo passa, e' vincolante.
-  const dailyPassato = input.biasD1 !== undefined && input.biasD1 !== null && input.biasD1 !== "";
-  const daily = verso(input.biasD1 ?? null);
-  if (dailyPassato && !daily) {
-    return no(`Daily laterale o assente (${String(input.biasD1)}): il 4H non decide la direzione.`);
+  const rawD1 =
+    input.biasD1 !== undefined && input.biasD1 !== null && input.biasD1 !== ""
+      ? input.biasD1
+      : biasDailyMemorizzato();
+  const daily = verso(rawD1);
+  if (!daily) {
+    return no(`Daily laterale o assente (${String(rawD1)}): il 4H non decide la direzione.`);
   }
-  if (daily && direzione !== daily) {
+  if (direzione !== daily) {
     return no(`Setup M15 ${direzione} contro Daily ${daily}: il Daily decide, H4 non ribalta.`);
   }
-  const h4 = verso(input.biasH4 ?? null);
-  const confermaH4 = !h4 ? "H4 laterale" : daily && h4 === daily ? "H4 allineato" : daily && h4 !== daily ? "H4 in pullback" : `H4 ${h4}`;
+
+  const rawH4 =
+    input.biasH4 !== undefined && input.biasH4 !== null && input.biasH4 !== ""
+      ? input.biasH4
+      : biasH4Memorizzato();
+  const h4 = verso(rawH4);
+  const confermaH4 = !h4 ? "H4 laterale" : h4 === daily ? "H4 allineato" : "H4 in pullback";
 
   const disp = input.displacement15m;
   const atrDisp = Number(disp?.ampiezzaImpulsoInAtr);
@@ -136,6 +144,6 @@ export function valutaSetupIctOriginale(input: {
     tp2,
     rischioRendimento: TP1_IN_R,
     zona: zonaTesto,
-    motivo: `ICT: Daily ${daily ?? "non passato"}, ${confermaH4}. ${evento} M15 ${dirZona}, displacement. Entry ${entry.toFixed(2)}. Stop su ${zonaTesto}.`,
+    motivo: `ICT: Daily ${daily}, ${confermaH4}. ${evento} M15 ${dirZona}, displacement. Entry ${entry.toFixed(2)}. Stop su ${zonaTesto}.`,
   };
 }
