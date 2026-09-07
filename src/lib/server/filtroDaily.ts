@@ -6,7 +6,7 @@ export function filtraSegnaleSulDaily(parsed: any, biasD1?: string | null): any 
     biasD1 === "rialzista" ? "BUY" : biasD1 === "ribassista" ? "SELL" : null;
   const dir = String(parsed?.direction ?? "").toUpperCase();
   if (dir !== "BUY" && dir !== "SELL") return parsed;
-  if (!daily) return parsed;
+  if (!daily) return scontaConfidenceSeDailyLaterale(parsed, biasD1);
   if (dir !== daily) {
     const etichetta = daily === "BUY" ? "rialzista" : "ribassista";
     return {
