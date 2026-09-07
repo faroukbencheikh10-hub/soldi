@@ -1,31 +1,48 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-// La terna operativa e' M5 / M15 / M30: il grafico mostra gli stessi
-// timeframe su cui l'agente rileva gli eventi.
 const TIMEFRAMES = [
   { label: "5m", value: "5" },
   { label: "15m", value: "15" },
   { label: "30m", value: "30" },
-];
+] as const;
 
 export function ChartPanel() {
   const [tf, setTf] = useState("5");
 
-  const src = `https://s.tradingview.com/widgetembed/?frameElementId=tv-chart&symbol=OANDA%3AXAUUSD&interval=${tf}&hidesidetoolbar=1&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=11151c&studies=%5B%5D&theme=dark&style=1&timezone=Etc%2FUTC`;
+  const src = useMemo(() => {
+    const config = {
+      autosize: true,
+      symbol: "OANDA:XAUUSD",
+      interval: tf,
+      timezone: "Etc/UTC",
+      theme: "light",
+      style: "1",
+      locale: "it",
+      backgroundColor: "#ffffff",
+      gridColor: "#eef0f4",
+      hide_top_toolbar: false,
+      hide_legend: false,
+      allow_symbol_change: false,
+      calendar: false,
+      support_host: "https://www.tradingview.com",
+    };
+    return `https://www.tradingview.com/embed-widget/advanced-chart/?locale=it#${encodeURIComponent(JSON.stringify(config))}`;
+  }, [tf]);
 
   return (
-    <div className="rounded-xl border border-border bg-panel overflow-hidden flex flex-col h-[520px]">
-      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+    <div className="rounded-xl border border-border bg-white overflow-hidden flex flex-col">
+      <div className="flex items-center justify-between border-b border-border px-4 py-2.5 bg-white">
         <span className="text-xs font-medium uppercase tracking-wide text-muted">XAUUSD — Grafico live</span>
         <div className="flex gap-1 rounded-lg bg-panel2 p-1">
           {TIMEFRAMES.map((t) => (
             <button
               key={t.value}
+              type="button"
               onClick={() => setTf(t.value)}
-              className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
-                tf === t.value ? "bg-gold text-black" : "text-muted hover:text-text"
+              className={`px-2.5 py-1 text-xs rounded-md font-medium ${
+                tf === t.value ? "bg-gold text-white" : "text-muted hover:text-text"
               }`}
             >
               {t.label}
@@ -33,8 +50,15 @@ export function ChartPanel() {
           ))}
         </div>
       </div>
-      <div className="flex-1">
-        <iframe key={tf} src={src} className="h-full w-full border-0" title="Grafico XAUUSD" />
+      <div className="relative w-full bg-white" style={{ height: 520 }}>
+        <iframe
+          key={`light-${tf}`}
+          src={src}
+          title={`Grafico XAUUSD ${tf}m`}
+          className="absolute inset-0 h-full w-full border-0 bg-white"
+          referrerPolicy="no-referrer-when-downgrade"
+          allow="fullscreen; clipboard-write"
+        />
       </div>
     </div>
   );

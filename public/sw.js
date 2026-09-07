@@ -1,5 +1,3 @@
-// Service Worker — Investment Pal (notifiche push)
-
 self.addEventListener("install", () => {
   self.skipWaiting();
 });
@@ -13,12 +11,12 @@ self.addEventListener("push", (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch {
-    data = { title: "Investment Pal", body: event.data ? event.data.text() : "Nuovo segnale disponibile" };
+    data = { title: "Soldi ORB", body: event.data ? event.data.text() : "Il mercato ha chiuso." };
   }
 
-  const title = data.title || "Investment Pal";
+  const title = data.title || "Soldi ORB";
   const options = {
-    body: data.body || "Nuovo segnale di trading disponibile",
+    body: data.body || "Il mercato ha chiuso.",
     icon: "/icon-192.png",
     badge: "/icon-192.png",
     data: { url: data.url || "/" },
@@ -32,7 +30,6 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const targetUrl = (event.notification.data && event.notification.data.url) || "/";
-
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
@@ -41,9 +38,7 @@ self.addEventListener("notificationclick", (event) => {
           return client.focus();
         }
       }
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(targetUrl);
-      }
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
     })
   );
 });
