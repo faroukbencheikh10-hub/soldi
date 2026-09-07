@@ -19,7 +19,6 @@ import {
 } from "@/lib/server/ictStructure";
 import {
   metaApiFetchQuote,
-  metaApiFetchTimeSeries,
   isMetaApiPriceStale,
 } from "@/lib/server/metaApiData";
 import { getMarketCalendarContext } from "@/lib/server/marketCalendar";
@@ -32,9 +31,9 @@ import {
 import {
   tdFetchQuote,
   tdFetchTimeSeries,
-  scarta,
   computeLiquidity24h,
 } from "@/lib/server/marketDataFns";
+import { memorizzaBiasIct } from "@/lib/server/ictDirezione";
 
 function compostoBias(c1d: unknown, biasD1: string, biasH4: string) {
   if (!c1d) {
@@ -133,7 +132,8 @@ export async function getCurrentPrice(): Promise<number | null> {
 }
 
 export async function getMarketSnapshot() {
-  const fallback = await tryTwelveData();
-  if (fallback) return { ...fallback, fetchedAt: new Date().toISOString() };
-  throw new Error("Impossibile recuperare dati di mercato: MetaApi e Twelve Data entrambi falliti");
+  const snap = await tryTwelveData();
+  if (!snap) throw new Error("Impossibile recuperare dati di mercato: MetaApi e Twelve Data entrambi falliti");
+  memorizzaBiasIct(snap.biasD1, snap.biasH4, snap.h4Conferma);
+  return { ...snap, fetchedAt: new Date().toISOString() };
 }
