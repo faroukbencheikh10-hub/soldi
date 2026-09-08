@@ -207,6 +207,8 @@ export async function closeTrade(
     mfe_usd?: number | null;
     mae_usd?: number | null;
     giorni_in_trade?: number | null;
+    chiuso_il?: string | null;
+    nota?: string | null;
   }
 ): Promise<void> {
   await getPool().query(
@@ -217,9 +219,20 @@ export async function closeTrade(
             mfe_usd = COALESCE($5, mfe_usd),
             mae_usd = COALESCE($6, mae_usd),
             giorni_in_trade = COALESCE($7, giorni_in_trade),
-            chiuso_il = now()
+            chiuso_il = COALESCE($8::timestamptz, now()),
+            spiegazione = CASE WHEN $9::text IS NULL THEN spiegazione ELSE COALESCE(spiegazione,'') || $9 END
       WHERE id = $1 AND esito = 'OPEN'`,
-    [id, patch.esito, patch.r_finale, patch.pnl_usd, patch.mfe_usd ?? null, patch.mae_usd ?? null, patch.giorni_in_trade ?? null]
+    [
+      id,
+      patch.esito,
+      patch.r_finale,
+      patch.pnl_usd,
+      patch.mfe_usd ?? null,
+      patch.mae_usd ?? null,
+      patch.giorni_in_trade ?? null,
+      patch.chiuso_il ?? null,
+      patch.nota ?? null,
+    ]
   );
 }
 
@@ -349,4 +362,24 @@ export async function sumClosedPnl(): Promise<{ weekUsd: number; weekR: number; 
 export async function getTradeById(id: string): Promise<SettTradeRow | null> {
   const res = await getPool().query(`SELECT * FROM sett_trades WHERE id = $1`, [id]);
   return res.rows[0] ? mapTrade(res.rows[0]) : null;
+}
+
+export async function getLastSnapshot(tradeId: string): Promise<{
+  ts: string;
+  price: number;
+  pnl_r: number | null;
+  pnl_usd: number | null;
+} | null> {
+  const res = await getPool().query(
+    `SELECT ts, price, pnl_r, pnl_usd FROM sett_snapshots WHERE trade_id = $1 ORDER BY ts DESC LIMIT 1`,
+    [tradeId]
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  return {
+    ts: String(row.ts),
+    price: Number(row.price),
+    pnl_r: num(row.pnl_r),
+    pnl_usd: num(row.pnl_usd),
+  };
 }
