@@ -1,7 +1,6 @@
 import { metaApiFetchTimeSeries, metaApiFetchQuote } from "@/lib/server/metaApiData";
 import { tdFetchTimeSeries, tdFetchQuote, type Candle } from "@/lib/server/marketDataFns";
 import { getMacroContext } from "@/lib/server/macroData";
-import { getEconomicCalendar } from "@/lib/server/calendar";
 import { getRelevantNews } from "@/lib/server/news";
 import { getMarketCalendarContext } from "@/lib/server/marketCalendar";
 import { computeATR } from "@/lib/server/atr";
@@ -99,6 +98,36 @@ export function livelliDaCandele(
   };
 }
 
+export async function getFinnhubHighImpactWeek(weekStart: Date) {
+  const from = weekStart.toISOString().slice(0, 10);
+  const to = new Date(weekStart.getTime() + 4 * 86_400_000).toISOString().slice(0, 10);
+  const key = process.env.FINNHUB_API_KEY;
+  if (!key) return [];
+  const url = `https://finnhub.io/api/v1/calendar/economic?from=${from}&to=${to}&token=${key}`;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const events = data?.economicCalendar ?? [];
+    return events
+      .filter((e: { impact?: string; country?: string }) => {
+        const impact = String(e.impact ?? "").toLowerCase();
+        const country = String(e.country ?? "").toUpperCase();
+        return impact === "high" && ["US", "USD", "EU", "EMU"].includes(country);
+      })
+      .map((e: { time?: string; country?: string; event?: string; impact?: string }, index: number) => ({
+        id: `finnhub-w-${index}`,
+        time: e.time ?? "",
+        country: e.country ?? "",
+        title: e.event ?? "N/D",
+        impact: "high",
+        source: "Finnhub",
+      }));
+  } catch {
+    return [];
+  }
+}
+
 export async function getContestoSettimana() {
   const [weekly, daily, h4, h1, m15, m5, macro, news, calCtx] = await Promise.all([
     getCandeleChiuse("1week", 20),
@@ -112,12 +141,7 @@ export async function getContestoSettimana() {
     getMarketCalendarContext(),
   ]);
 
-  let calendar = await getEconomicCalendar();
-  const weekEnd = new Date(weekStartUtc().getTime() + 5 * 86_400_000);
-  calendar = calendar.filter((e) => {
-    const t = new Date(e.time).getTime();
-    return Number.isFinite(t) && t <= weekEnd.getTime() && (e.impact === "high" || e.impact === "High");
-  });
+  const calendar = await getFinnhubHighImpactWeek(weekStartUtc());
 
   const livelli = livelliDaCandele(weekly, daily);
   const atrH1 = computeATR(
