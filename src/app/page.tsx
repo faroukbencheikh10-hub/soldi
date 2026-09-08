@@ -6,6 +6,7 @@ import { AiPauseToggle } from "@/components/ai-pause-toggle";
 import { ChiamateToggle } from "@/components/chiamate-toggle";
 import { SignalHistory } from "@/components/signal-history";
 import { MacroContext } from "@/components/macro-context";
+import { TradeSettimana } from "@/components/trade-settimana";
 import { MarketHoursCompact } from "@/components/market-hours-compact";
 import { ContextFeed } from "@/components/context-feed";
 import { PerformanceStatsPanel } from "@/components/performance-stats";
@@ -147,6 +148,7 @@ export default async function Home() {
             <GenerateSignalButton />
             <SignalPanel signal={currentSignal} />
             <MacroContext dxy={dxyQuote} us10y={us10yQuote} />
+            <TradeSettimana />
             <MarketHoursCompact mercati={marketCalendar} />
             <ContextFeed events={calendar} news={news} />
             <PerformanceStatsPanel stats={performanceStats} />
