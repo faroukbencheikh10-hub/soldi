@@ -123,6 +123,8 @@ async function metaApiGetWithRegion(buildUrl: (region: string) => string): Promi
 
 export async function metaApiFetchQuote(symbol: string = SYMBOL): Promise<{
   close: number;
+  bid: number;
+  ask: number;
   percent_change: number;
   quotedAt: number | null;
 } | null> {
@@ -138,7 +140,13 @@ export async function metaApiFetchQuote(symbol: string = SYMBOL): Promise<{
     if (!Number.isFinite(close)) return null;
 
     const quotedAt = data.time ? new Date(data.time).getTime() : null;
-    return { close, percent_change: 0, quotedAt: Number.isFinite(quotedAt) ? quotedAt : null };
+    return {
+      close,
+      bid: data.bid,
+      ask: data.ask,
+      percent_change: 0,
+      quotedAt: Number.isFinite(quotedAt) ? quotedAt : null,
+    };
   } catch (err) {
     console.error(`[metaApiData] prezzo fallito (${symbol}):`, err);
     return null;
@@ -146,6 +154,7 @@ export async function metaApiFetchQuote(symbol: string = SYMBOL): Promise<{
 }
 
 const TIMEFRAME_MAP: Record<string, string> = {
+  "1min": "1m",
   "5min": "5m",
   "15min": "15m",
   "30min": "30m",
