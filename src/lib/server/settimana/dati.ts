@@ -98,7 +98,16 @@ export function livelliDaCandele(
   };
 }
 
-export async function getFinnhubHighImpactWeek(weekStart: Date) {
+export type CalEventoSett = {
+  id: string;
+  time: string;
+  country: string;
+  title: string;
+  impact: string;
+  source: string;
+};
+
+export async function getFinnhubHighImpactWeek(weekStart: Date): Promise<CalEventoSett[]> {
   const from = weekStart.toISOString().slice(0, 10);
   const to = new Date(weekStart.getTime() + 4 * 86_400_000).toISOString().slice(0, 10);
   const key = process.env.FINNHUB_API_KEY;

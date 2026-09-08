@@ -137,13 +137,15 @@ async function generaMappa(rigenerata: boolean, motivoRegen?: string): Promise<S
     dxy_var: ctx.macro.dxy.changePct ?? "N/D",
     us10y: ctx.macro.us10y.value ?? "N/D",
     us10y_var: ctx.macro.us10y.changePct ?? "N/D",
-    calendario_high_impact: calendar.map((e) => ({
-      time: e.time || "N/D",
-      country: e.country || "N/D",
-      title: e.title || "N/D",
-      impact: e.impact || "high",
-    })),
-    news_cnbc: (ctx.news ?? []).slice(0, 20).map((n) => ({
+    calendario_high_impact: calendar.map(
+      (e: { time: string; country: string; title: string; impact: string }) => ({
+        time: e.time || "N/D",
+        country: e.country || "N/D",
+        title: e.title || "N/D",
+        impact: e.impact || "high",
+      })
+    ),
+    news_cnbc: (ctx.news ?? []).slice(0, 20).map((n: { title?: string; time?: string | null; source?: string }) => ({
       title: n.title ?? "N/D",
       time: n.time ?? "N/D",
       source: n.source ?? "CNBC",
