@@ -4,9 +4,8 @@ import {
   getOpenTrade,
   getTradeForWeek,
   sumClosedPnl,
-  getLastNoTrade,
-  getContoSettimanaStats,
 } from "./repo";
+import { getLastNoTrade, getContoSettimanaStats } from "./queryExtra";
 import { getPrezzoXau } from "./dati";
 import { floating } from "./pnl";
 import { weekStartIso } from "./week";
